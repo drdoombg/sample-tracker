@@ -6,7 +6,8 @@
 <meta name="theme-color" content="#0f1b2d">
 <title>Sample Tracker</title>
 
-<link rel="manifest" href='data:application/manifest+json,{"name":"Sample Tracker","short_name":"Samples","start_url":".","display":"standalone","background_color":"%230f1b2d","theme_color":"%230f1b2d","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 192 192%22%3E%3Crect width=%22192%22 height=%22192%22 rx=%2242%22 fill=%22%230f1b2d%22/%3E%3Ccircle cx=%2296%22 cy=%2278%22 r=%2234%22 fill=%22none%22 stroke=%22%234db6ac%22 stroke-width=%2210%22/%3E%3Crect x=%2286%22 y=%22104%22 width=%2220%22 height=%2250%22 rx=%226%22 fill=%22%234db6ac%22/%3E%3C/svg%3E","sizes":"192x192","type":"image/svg+xml"}]}'>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 
 <style>
   :root {
@@ -510,6 +511,13 @@ document.getElementById('importFile').addEventListener('change',e=>{
 });
 
 render();
+
+// Register service worker (needed for install-to-drawer + offline use)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
 </script>
 </body>
 </html>
