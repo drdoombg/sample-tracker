@@ -91,6 +91,20 @@
   body.editing .check { display:none; }
   body.editing .chip { cursor:default; }
   .del-btn.confirm { background:var(--danger); color:#fff; border-color:var(--danger); font-size:13px; }
+  /* multi-add name rows */
+  .name-row-wrap { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
+  .name-row-wrap input { flex:1; margin:0; }
+  .row-del { background:rgba(229,96,77,.12); border:1px solid rgba(229,96,77,.4); color:var(--danger);
+    width:44px; height:46px; border-radius:10px; font-size:18px; cursor:pointer; flex-shrink:0; }
+  /* sort-mode arrows */
+  .sort-arrows { display:none; gap:4px; flex-shrink:0; }
+  body.sorting .sort-arrows { display:flex; }
+  body.sorting .check { display:none; }
+  body.sorting .chip { cursor:default; }
+  .arrow-btn { width:32px; height:32px; border-radius:8px; border:1px solid var(--line);
+    background:var(--panel-2); color:var(--ink); font-size:14px; cursor:pointer; display:grid; place-items:center; }
+  .arrow-btn:active { background:var(--line); }
+  .arrow-btn:disabled { opacity:.3; }
   .none-yet { font-size:12.5px; color:var(--ink-dim); padding:2px 4px 6px; }
 
   .empty { text-align:center; color:var(--ink-dim); padding:50px 24px; line-height:1.6; }
@@ -180,8 +194,11 @@
         <option value="deb">Deboning</option>
       </select>
     </div>
-    <label>Product / sample name</label>
-    <input id="sampleName" placeholder="e.g. Chicken breast" autocomplete="off">
+    <label>Product / sample name(s)</label>
+    <div id="nameRows">
+      <input class="name-row" placeholder="e.g. Chicken breast" autocomplete="off">
+    </div>
+    <button class="btn ghost" id="addAnother" style="width:100%; margin-top:8px; font-size:14px; padding:11px;">＋ add another</button>
     <div class="sheet-actions">
       <button class="btn ghost" id="cancelAdd">Cancel</button>
       <button class="btn primary" id="saveAdd">Add product</button>
@@ -193,6 +210,7 @@
   <div class="sheet">
     <h2>Menu</h2>
     <button class="btn ghost" id="editToggle" style="width:100%">Toggle edit mode (delete products)</button>
+    <button class="btn ghost" id="sortToggle" style="width:100%; margin-top:10px;">Toggle sort mode (reorder within room)</button>
 
     <div class="divider"></div>
     <h2 style="font-size:15px">Customers &amp; frequencies</h2>
@@ -239,6 +257,7 @@ function hasRooms(custName){ return custName!=='KFC'; }
 
 let state = load();
 let editing = false;
+let sorting = false;
 let openSet = new Set();
 
 function weekKey(d=new Date()){
@@ -290,6 +309,7 @@ const main=document.getElementById('main');
 
 function render(){
   document.body.classList.toggle('editing', editing);
+  document.body.classList.toggle('sorting', sorting);
   const now=new Date();
   document.getElementById('periodNote').textContent =
     `Week resets Mon · ${now.toLocaleDateString('en-GB',{month:'long'})} resets on the 1st`;
@@ -326,30 +346,43 @@ function sectionsHTML(c,prods){
   let out='';
   for(const f of c.freqs){
     const rows=[];
-    for(const p of prods) for(const r of rowsForProduct(p,c)) if(r.freq===f) rows.push(r);
+    prods.forEach((p,idx)=>{
+      for(const r of rowsForProduct(p,c)) if(r.freq===f){ r._idx=idx; rows.push(r); }
+    });
     out += `<div class="section-label ${f}">${f}</div>`;
     if(rows.length===0){ out+=`<div class="none-yet">No ${f} products yet</div>`; }
     else{
-      // order by room (Fresh Pack 1 → 2 → Cutting → Deboning), then keep add order
-      rows.sort((a,b)=>roomOrder(a.room)-roomOrder(b.room));
-      out += rows.map(chipHTML).join('');
+      // order by room (FP1 → FP2 → Cutting → Deboning); within a room keep manual array order
+      rows.sort((a,b)=> (roomOrder(a.room)-roomOrder(b.room)) || (a._idx-b._idx) );
+      out += rows.map(r=>chipHTML(r,c,f)).join('');
     }
   }
   return out;
 }
-function chipHTML(r){
+function chipHTML(r,c,f){
   const done=isDone(r.pid,r.freq);
   const info=r.room?roomInfo(r.room):null;
   const nameCls=info?info.cls:'';
   return `<div class="chip ${r.freq} ${done?'done':''}" data-pid="${r.pid}" data-freq="${r.freq}">
     <div class="check">${CHECK_SVG}</div>
     <span class="chip-name ${nameCls}">${esc(r.name)}</span>
+    <div class="sort-arrows">
+      <button class="arrow-btn" data-move="up"   data-pid="${r.pid}">▲</button>
+      <button class="arrow-btn" data-move="down" data-pid="${r.pid}">▼</button>
+    </div>
     <button class="del-btn" data-delpid="${r.pid}">✕</button>
   </div>`;
 }
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 main.addEventListener('click',e=>{
+  // sort-mode arrows: move product within its room
+  const mv=e.target.closest('[data-move]');
+  if(mv){
+    e.stopPropagation();
+    moveProduct(mv.getAttribute('data-pid'), mv.getAttribute('data-move'));
+    return;
+  }
   const del=e.target.closest('[data-delpid]');
   if(del){
     e.stopPropagation();
@@ -383,6 +416,25 @@ main.addEventListener('click',e=>{
   render();
 });
 
+// Move a product up/down within its own customer+room block.
+function moveProduct(pid, dir){
+  const p = state.products.find(x=>x.id===pid);
+  if(!p) return;
+  const room = p.room || 'none';
+  // indices (in global products array) of same customer + same room products, in array order
+  const group = state.products
+    .map((x,i)=>({x,i}))
+    .filter(o=> o.x.customer===p.customer && (o.x.room||'none')===room)
+    .map(o=>o.i);
+  const posInGroup = group.indexOf(state.products.indexOf(p));
+  const target = dir==='up' ? posInGroup-1 : posInGroup+1;
+  if(target<0 || target>=group.length) return; // already at edge
+  const iA = group[posInGroup], iB = group[target];
+  // swap in the global array
+  [state.products[iA], state.products[iB]] = [state.products[iB], state.products[iA]];
+  save(); render();
+}
+
 document.getElementById('expandAll').addEventListener('click',()=>{
   state.customers.forEach(c=>{
     const has=state.products.some(p=>p.customer===c.name);
@@ -394,10 +446,25 @@ document.getElementById('collapseAll').addEventListener('click',()=>{ openSet.cl
 
 const addSheet=document.getElementById('addSheet');
 const custSelect=document.getElementById('custSelect');
-const sampleName=document.getElementById('sampleName');
+const nameRows=document.getElementById('nameRows');
 const addHint=document.getElementById('addHint');
 const otherFreqWrap=document.getElementById('otherFreqWrap');
 let otherFreq='monthly';
+
+// build a single name-input row (with a remove button when there are several)
+function makeNameRow(showRemove){
+  const wrap=document.createElement('div');
+  wrap.className='name-row-wrap';
+  wrap.innerHTML=`<input class="name-row" placeholder="e.g. Chicken breast" autocomplete="off">
+    ${showRemove?'<button class="row-del" title="remove">✕</button>':''}`;
+  wrap.querySelector('.row-del')?.addEventListener('click',()=>{ wrap.remove(); });
+  return wrap;
+}
+document.getElementById('addAnother').addEventListener('click',()=>{
+  const row=makeNameRow(true);
+  nameRows.appendChild(row);
+  row.querySelector('input').focus();
+});
 
 const roomWrap=document.getElementById('roomWrap');
 const roomSelect=document.getElementById('roomSelect');
@@ -427,22 +494,30 @@ function setOtherFreq(f){
 document.getElementById('otherFreqSeg').addEventListener('click',e=>{
   const b=e.target.closest('button'); if(b) setOtherFreq(b.getAttribute('data-freq'));
 });
+function resetNameRows(){
+  nameRows.innerHTML='';
+  nameRows.appendChild(makeNameRow(false));
+}
 function openAdd(){
   custSelect.innerHTML=state.customers.map(c=>`<option>${esc(c.name)}</option>`).join('');
-  sampleName.value=''; setOtherFreq('monthly'); refreshAddSheet();
-  addSheet.classList.add('show'); setTimeout(()=>sampleName.focus(),250);
+  resetNameRows(); setOtherFreq('monthly'); refreshAddSheet();
+  addSheet.classList.add('show');
+  setTimeout(()=>nameRows.querySelector('input')?.focus(),250);
 }
 custSelect.addEventListener('change',refreshAddSheet);
 document.getElementById('addBtn').addEventListener('click',openAdd);
 document.getElementById('cancelAdd').addEventListener('click',()=>addSheet.classList.remove('show'));
 document.getElementById('saveAdd').addEventListener('click',()=>{
-  const name=sampleName.value.trim();
-  if(!name){ alert('Give the product a name.'); return; }
+  const names=[...nameRows.querySelectorAll('input')].map(i=>i.value.trim()).filter(Boolean);
+  if(names.length===0){ alert('Enter at least one product name.'); return; }
   const c=getCust(custSelect.value);
-  const prod={ id:Date.now().toString(36)+Math.random().toString(36).slice(2,6), customer:custSelect.value, name };
-  if(c&&c.other) prod.freq=otherFreq;
-  if(hasRooms(custSelect.value)) prod.room=document.getElementById('roomSelect').value;
-  state.products.push(prod);
+  const room = hasRooms(custSelect.value) ? document.getElementById('roomSelect').value : undefined;
+  for(const name of names){
+    const prod={ id:Date.now().toString(36)+Math.random().toString(36).slice(2,6), customer:custSelect.value, name };
+    if(c&&c.other) prod.freq=otherFreq;
+    if(room!==undefined) prod.room=room;
+    state.products.push(prod);
+  }
   openSet.add(custSelect.value);
   save(); addSheet.classList.remove('show'); render();
 });
@@ -490,7 +565,8 @@ document.getElementById('addCustBtn').addEventListener('click',()=>{
 });
 document.getElementById('menuBtn').addEventListener('click',()=>{ renderCustList(); menuSheet.classList.add('show'); });
 document.getElementById('closeMenu').addEventListener('click',()=>menuSheet.classList.remove('show'));
-document.getElementById('editToggle').addEventListener('click',()=>{ editing=!editing; menuSheet.classList.remove('show'); render(); });
+document.getElementById('editToggle').addEventListener('click',()=>{ editing=!editing; if(editing) sorting=false; menuSheet.classList.remove('show'); render(); });
+document.getElementById('sortToggle').addEventListener('click',()=>{ sorting=!sorting; if(sorting) editing=false; menuSheet.classList.remove('show'); render(); });
 [addSheet,menuSheet].forEach(s=>s.addEventListener('click',e=>{ if(e.target===s) s.classList.remove('show'); }));
 
 document.getElementById('exportBtn').addEventListener('click',()=>{
