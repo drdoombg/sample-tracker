@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f1b2d">
+<title>Sample Tracker</title>
+
+<link rel="manifest" href='data:application/manifest+json,{"name":"Sample Tracker","short_name":"Samples","start_url":".","display":"standalone","background_color":"%230f1b2d","theme_color":"%230f1b2d","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 192 192%22%3E%3Crect width=%22192%22 height=%22192%22 rx=%2242%22 fill=%22%230f1b2d%22/%3E%3Ccircle cx=%2296%22 cy=%2278%22 r=%2234%22 fill=%22none%22 stroke=%22%234db6ac%22 stroke-width=%2210%22/%3E%3Crect x=%2286%22 y=%22104%22 width=%2220%22 height=%2250%22 rx=%226%22 fill=%22%234db6ac%22/%3E%3C/svg%3E","sizes":"192x192","type":"image/svg+xml"}]}'>
+
+<style>
+  :root {
+    --bg:#0f1b2d; --panel:#17263d; --panel-2:#1e3150; --ink:#eef3f8; --ink-dim:#90a4bd;
+    --line:#2a3f5f; --weekly:#f2a03d; --monthly:#7c8cf8; --done:#3ec98a; --done-bg:#14312a;
+    --danger:#e5604d; --radius:14px;
+    /* room name colours — tuned to read on the dark panel */
+    --room-fp1:#5fd0e6;   /* Fresh Pack 1 — cyan */
+    --room-fp2:#8ee06b;   /* Fresh Pack 2 — lime green */
+    --room-cut:#f2b84b;   /* Cutting — amber */
+    --room-deb:#e88ad0;   /* Deboning — pink */
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    padding-bottom:env(safe-area-inset-bottom); min-height:100vh; }
+
+  header { position:sticky; top:0; z-index:20;
+    background:linear-gradient(180deg,var(--bg) 78%,transparent);
+    padding:calc(env(safe-area-inset-top) + 14px) 16px 10px; }
+  .title-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  h1 { font-size:19px; margin:0; letter-spacing:.2px; font-weight:650; }
+  .period-note { font-size:12px; color:var(--ink-dim); margin-top:2px; }
+  .icon-btn { background:var(--panel); border:1px solid var(--line); color:var(--ink);
+    border-radius:10px; padding:8px 12px; font-size:13px; font-weight:600; cursor:pointer; }
+  .icon-btn:active { background:var(--panel-2); }
+
+  .toolbar { display:flex; gap:8px; margin-top:12px; }
+  .toolbar button { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--ink-dim);
+    border-radius:10px; padding:9px; font-size:13px; font-weight:600; cursor:pointer; }
+  .toolbar button:active { background:var(--panel-2); color:var(--ink); }
+
+  main { padding:8px 16px 120px; }
+
+  .cust { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    margin-bottom:10px; overflow:hidden; }
+  .cust-head { display:flex; align-items:center; gap:12px; padding:15px 15px; cursor:pointer; user-select:none; }
+  .caret { width:9px; height:9px; border-right:2px solid var(--ink-dim); border-bottom:2px solid var(--ink-dim);
+    transform:rotate(-45deg); transition:transform .18s; flex-shrink:0; margin-right:2px; }
+  .cust.open .caret { transform:rotate(45deg); }
+  .cust-name { flex:1; font-size:16px; font-weight:600; }
+  .cust-badges { font-size:10px; font-weight:700; letter-spacing:.5px; color:var(--ink-dim); margin-left:8px; }
+  .cust-count { font-size:12.5px; font-weight:600; }
+  .cust-count.needed { color:var(--weekly); }
+  .cust-count.clear { color:var(--done); }
+
+  .cust-body { display:none; padding:0 12px 10px; }
+  .cust.open .cust-body { display:block; }
+
+  .section-label { font-size:11px; font-weight:700; letter-spacing:.6px; text-transform:uppercase;
+    color:var(--ink-dim); margin:12px 4px 8px; display:flex; align-items:center; gap:7px; }
+  .section-label::before { content:''; width:8px; height:8px; border-radius:50%; }
+  .section-label.weekly::before  { background:var(--weekly); }
+  .section-label.monthly::before { background:var(--monthly); }
+
+  .chip { display:flex; align-items:center; gap:12px; background:var(--bg);
+    border:1px solid var(--line); border-left:4px solid var(--line);
+    border-radius:11px; padding:12px 13px; margin-bottom:7px; cursor:pointer;
+    transition:background .12s,border-color .12s,opacity .12s; }
+  .chip:active { transform:scale(.994); }
+  .chip.weekly  { border-left-color:var(--weekly); }
+  .chip.monthly { border-left-color:var(--monthly); }
+  .chip.done { background:var(--done-bg); border-left-color:var(--done); opacity:.82; }
+  .check { width:23px; height:23px; border-radius:50%; border:2px solid var(--line);
+    flex-shrink:0; display:grid; place-items:center; }
+  .chip.done .check { border-color:var(--done); background:var(--done); }
+  .check svg { width:13px; height:13px; display:none; }
+  .chip.done .check svg { display:block; }
+  .chip-name { flex:1; font-size:15px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chip-name.room-fp1 { color:var(--room-fp1); }
+  .chip-name.room-fp2 { color:var(--room-fp2); }
+  .chip-name.room-cut { color:var(--room-cut); }
+  .chip-name.room-deb { color:var(--room-deb); }
+  .chip.done .chip-name { text-decoration:line-through; text-decoration-color:var(--done); opacity:.75; }
+  .room-note { font-size:11px; font-weight:600; color:var(--ink-dim); flex-shrink:0; }
+  .del-btn { background:rgba(229,96,77,.12); border:1px solid rgba(229,96,77,.4);
+    color:var(--danger); font-size:16px; line-height:1; height:34px; min-width:34px; border-radius:9px;
+    padding:0 8px; cursor:pointer; display:none; flex-shrink:0; align-items:center; justify-content:center;
+    font-weight:700; white-space:nowrap; }
+  body.editing .del-btn { display:flex; }
+  body.editing .check { display:none; }
+  body.editing .chip { cursor:default; }
+  .del-btn.confirm { background:var(--danger); color:#fff; border-color:var(--danger); font-size:13px; }
+  .none-yet { font-size:12.5px; color:var(--ink-dim); padding:2px 4px 6px; }
+
+  .empty { text-align:center; color:var(--ink-dim); padding:50px 24px; line-height:1.6; }
+  .empty b { color:var(--ink); }
+
+  .fab { position:fixed; right:16px; bottom:calc(16px + env(safe-area-inset-bottom)); z-index:30;
+    background:var(--done); color:#06231a; border:none; border-radius:30px; padding:15px 22px;
+    font-size:15px; font-weight:700; box-shadow:0 8px 24px rgba(0,0,0,.4); cursor:pointer; }
+  .fab:active { transform:translateY(1px); }
+
+  .backdrop { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40; display:none; align-items:flex-end; }
+  .backdrop.show { display:flex; }
+  .sheet { background:var(--panel); width:100%; border-radius:20px 20px 0 0;
+    padding:20px 18px calc(24px + env(safe-area-inset-bottom)); border-top:1px solid var(--line);
+    animation:slideup .2s ease; max-height:88vh; overflow-y:auto; }
+  @keyframes slideup { from { transform:translateY(40px); opacity:.4; } }
+  .sheet h2 { margin:0 0 6px; font-size:17px; }
+  .sheet .hint { font-size:12.5px; color:var(--ink-dim); margin:0 0 8px; line-height:1.5; }
+  label { display:block; font-size:13px; color:var(--ink-dim); margin:12px 0 6px; }
+  input, select { width:100%; background:var(--bg); border:1px solid var(--line); color:var(--ink);
+    border-radius:10px; padding:13px; font-size:15px; font-family:inherit; }
+  .seg { display:flex; gap:6px; margin-top:6px; }
+  .seg button { flex:1; padding:12px; border-radius:10px; border:1px solid var(--line);
+    background:var(--bg); color:var(--ink-dim); font-size:14px; font-weight:600; cursor:pointer; }
+  .seg button.on { background:var(--panel-2); color:var(--ink); border-color:var(--ink-dim); }
+  .sheet-actions { display:flex; gap:10px; margin-top:22px; }
+  .btn { flex:1; padding:14px; border-radius:12px; border:none; font-size:15px; font-weight:700; cursor:pointer; }
+  .btn.primary { background:var(--done); color:#06231a; }
+  .btn.ghost { background:var(--bg); color:var(--ink); border:1px solid var(--line); }
+  .backup-row { display:flex; gap:10px; margin-top:14px; }
+  .backup-row .btn { font-size:14px; padding:13px; }
+  .warn { background:rgba(229,96,77,.1); border:1px solid rgba(229,96,77,.35); color:#f0a599;
+    font-size:12.5px; line-height:1.5; padding:12px 14px; border-radius:10px; margin-top:16px; }
+  .divider { height:1px; background:var(--line); margin:18px 0; }
+  .cust-row { display:flex; align-items:center; gap:10px; padding:11px 0; border-bottom:1px solid var(--line); }
+  .cust-row:last-child { border-bottom:none; }
+  .cr-name { flex:1; font-size:15px; font-weight:550; }
+  .mini { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px;
+    padding:4px 8px; border-radius:6px; border:1px solid var(--line); color:var(--ink-dim);
+    background:var(--bg); cursor:pointer; user-select:none; }
+  .mini.on-weekly  { background:rgba(242,160,61,.18);  color:var(--weekly);  border-color:transparent; }
+  .mini.on-monthly { background:rgba(124,140,248,.18); color:var(--monthly); border-color:transparent; }
+  .cust-del { color:var(--danger); background:none; border:none; font-size:18px; cursor:pointer; padding:0 2px; }
+  .locked { opacity:.5; pointer-events:none; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title-row">
+    <div>
+      <h1>Sample Tracker</h1>
+      <div class="period-note" id="periodNote"></div>
+    </div>
+    <button class="icon-btn" id="menuBtn">Menu</button>
+  </div>
+  <div class="toolbar">
+    <button id="expandAll">Expand all</button>
+    <button id="collapseAll">Collapse all</button>
+  </div>
+</header>
+
+<main id="main"></main>
+
+<button class="fab" id="addBtn">+ Add product</button>
+
+<div class="backdrop" id="addSheet">
+  <div class="sheet">
+    <h2>Add product</h2>
+    <p class="hint" id="addHint"></p>
+    <label>Customer</label>
+    <select id="custSelect"></select>
+    <div id="otherFreqWrap" class="hidden">
+      <label>Frequency (for Other)</label>
+      <div class="seg" id="otherFreqSeg">
+        <button data-freq="weekly">Weekly</button>
+        <button data-freq="monthly" class="on">Monthly</button>
+      </div>
+    </div>
+    <div id="roomWrap">
+      <label>Room</label>
+      <select id="roomSelect">
+        <option value="fp1">Fresh Pack 1</option>
+        <option value="fp2">Fresh Pack 2</option>
+        <option value="cut">Cutting</option>
+        <option value="deb">Deboning</option>
+      </select>
+    </div>
+    <label>Product / sample name</label>
+    <input id="sampleName" placeholder="e.g. Chicken breast" autocomplete="off">
+    <div class="sheet-actions">
+      <button class="btn ghost" id="cancelAdd">Cancel</button>
+      <button class="btn primary" id="saveAdd">Add product</button>
+    </div>
+  </div>
+</div>
+
+<div class="backdrop" id="menuSheet">
+  <div class="sheet">
+    <h2>Menu</h2>
+    <button class="btn ghost" id="editToggle" style="width:100%">Toggle edit mode (delete products)</button>
+
+    <div class="divider"></div>
+    <h2 style="font-size:15px">Customers &amp; frequencies</h2>
+    <p class="hint">Tap <b>W</b> / <b>M</b> to set how a customer is sampled. Every product you add follows this.</p>
+    <div id="custList"></div>
+    <label>Add a customer</label>
+    <div style="display:flex; gap:8px;">
+      <input id="newCustName" placeholder="e.g. Waitrose" autocomplete="off">
+      <button class="btn primary" id="addCustBtn" style="flex:0 0 auto; padding:13px 18px;">Add</button>
+    </div>
+
+    <div class="divider"></div>
+    <div class="backup-row">
+      <button class="btn ghost" id="exportBtn">⬇ Backup to file</button>
+      <button class="btn ghost" id="importBtn">⬆ Import backup</button>
+    </div>
+    <input type="file" id="importFile" accept="application/json" class="hidden">
+    <div class="warn">⚠ Before installing a new version, tap <b>Backup to file</b>. After reinstalling, tap <b>Import backup</b> to restore everything.</div>
+    <div class="sheet-actions"><button class="btn primary" id="closeMenu">Done</button></div>
+  </div>
+</div>
+
+<script>
+const STORE_KEY = 'sampleTracker.v3';
+const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="#06231a" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+
+// Room order + labels. Display order follows this array.
+const ROOMS = [
+  { key:'fp1', label:'Fresh Pack 1', cls:'room-fp1' },
+  { key:'fp2', label:'Fresh Pack 2', cls:'room-fp2' },
+  { key:'cut', label:'Cutting',      cls:'room-cut' },
+  { key:'deb', label:'Deboning',     cls:'room-deb' }
+];
+function roomInfo(key){
+  if(key==='none') return { key:'none', label:'None', cls:'' }; // white name
+  return ROOMS.find(r=>r.key===key);
+}
+function roomOrder(key){
+  if(key==='none'||!key) return -1;            // None / no-room first
+  const i=ROOMS.findIndex(r=>r.key===key); return i<0?99:i;
+}
+// Customers with no room concept
+function hasRooms(custName){ return custName!=='KFC'; }
+
+let state = load();
+let editing = false;
+let openSet = new Set();
+
+function weekKey(d=new Date()){
+  const x=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+  const day=x.getDay(); const back=(day===0)?6:day-1; x.setDate(x.getDate()-back);
+  return x.getFullYear()+'-'+(x.getMonth()+1)+'-'+x.getDate();
+}
+function monthKey(d=new Date()){ return d.getFullYear()+'-'+(d.getMonth()+1); }
+
+function load(){
+  try{ const raw=localStorage.getItem(STORE_KEY); if(raw) return JSON.parse(raw); }catch(e){}
+  return {
+    customers:[
+      {name:'Aldi',freqs:['monthly']},{name:'Asda',freqs:['monthly']},
+      {name:'Co-op',freqs:['weekly','monthly']},{name:'M&S',freqs:['monthly']},
+      {name:'KFC',freqs:['monthly']},{name:'Booth',freqs:['monthly']},
+      {name:'Iceland',freqs:['monthly']},{name:'Tesco',freqs:['weekly']},
+      {name:'Ocado',freqs:['monthly']},
+      {name:'Other',freqs:['weekly','monthly'],other:true}
+    ],
+    products:[], ticks:{}
+  };
+}
+function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function getCust(name){ return state.customers.find(c=>c.name===name); }
+
+function rowsForProduct(p,c){
+  if (c.other) return [{pid:p.id,name:p.name,freq:p.freq,room:p.room}];
+  return c.freqs.map(f=>({pid:p.id,name:p.name,freq:f,room:p.room}));
+}
+function tickKey(pid,freq){ return pid+'|'+freq; }
+function isDone(pid,freq){
+  const v=state.ticks[tickKey(pid,freq)];
+  return freq==='weekly'?v===weekKey():v===monthKey();
+}
+function toggleDone(pid,freq){
+  const k=tickKey(pid,freq); const now=freq==='weekly'?weekKey():monthKey();
+  state.ticks[k]=(state.ticks[k]===now)?null:now; save();
+}
+function custPending(c){
+  let pend=0,total=0;
+  for(const p of state.products.filter(p=>p.customer===c.name)){
+    for(const r of rowsForProduct(p,c)){ total++; if(!isDone(r.pid,r.freq)) pend++; }
+  }
+  return {pend,total};
+}
+
+const main=document.getElementById('main');
+
+function render(){
+  document.body.classList.toggle('editing', editing);
+  const now=new Date();
+  document.getElementById('periodNote').textContent =
+    `Week resets Mon · ${now.toLocaleDateString('en-GB',{month:'long'})} resets on the 1st`;
+
+  if (state.products.length===0 && !editing){
+    main.innerHTML=`<div class="empty">No products yet.<br>Tap <b>+ Add product</b> to start.<br><br>
+      Co-op is weekly + monthly, Tesco weekly, the rest monthly. <b>Other</b> is for swabs, allergen and anything extra.</div>`;
+    return;
+  }
+
+  let html='';
+  for(const c of state.customers){
+    const prods=state.products.filter(p=>p.customer===c.name);
+    if (prods.length===0 && !editing && !c.other) continue;
+    const {pend,total}=custPending(c);
+    const open=openSet.has(c.name);
+    const badges=c.freqs.map(f=>f[0].toUpperCase()).join(' + ');
+    const countHTML = total===0 ? `<span class="cust-count">—</span>`
+      : pend>0 ? `<span class="cust-count needed">${pend} needed</span>`
+               : `<span class="cust-count clear">all done</span>`;
+    html += `<div class="cust ${open?'open':''}" data-cust="${esc(c.name)}">
+      <div class="cust-head" data-toggle="${esc(c.name)}">
+        <span class="caret"></span>
+        <span class="cust-name">${esc(c.name)}<span class="cust-badges">${badges}</span></span>
+        ${countHTML}
+      </div>
+      <div class="cust-body">${sectionsHTML(c,prods)}</div>
+    </div>`;
+  }
+  main.innerHTML = html || `<div class="empty">Nothing to show.</div>`;
+}
+
+function sectionsHTML(c,prods){
+  let out='';
+  for(const f of c.freqs){
+    const rows=[];
+    for(const p of prods) for(const r of rowsForProduct(p,c)) if(r.freq===f) rows.push(r);
+    out += `<div class="section-label ${f}">${f}</div>`;
+    if(rows.length===0){ out+=`<div class="none-yet">No ${f} products yet</div>`; }
+    else{
+      // order by room (Fresh Pack 1 → 2 → Cutting → Deboning), then keep add order
+      rows.sort((a,b)=>roomOrder(a.room)-roomOrder(b.room));
+      out += rows.map(chipHTML).join('');
+    }
+  }
+  return out;
+}
+function chipHTML(r){
+  const done=isDone(r.pid,r.freq);
+  const info=r.room?roomInfo(r.room):null;
+  const nameCls=info?info.cls:'';
+  return `<div class="chip ${r.freq} ${done?'done':''}" data-pid="${r.pid}" data-freq="${r.freq}">
+    <div class="check">${CHECK_SVG}</div>
+    <span class="chip-name ${nameCls}">${esc(r.name)}</span>
+    <button class="del-btn" data-delpid="${r.pid}">✕</button>
+  </div>`;
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+main.addEventListener('click',e=>{
+  const del=e.target.closest('[data-delpid]');
+  if(del){
+    e.stopPropagation();
+    // Two-tap confirm: first tap arms the button, second tap deletes.
+    if(del.classList.contains('confirm')){
+      const pid=del.getAttribute('data-delpid');
+      state.products=state.products.filter(x=>x.id!==pid);
+      Object.keys(state.ticks).forEach(k=>{ if(k.startsWith(pid+'|')) delete state.ticks[k]; });
+      save(); render();
+    } else {
+      // reset any other armed buttons, arm this one
+      document.querySelectorAll('.del-btn.confirm').forEach(b=>{ b.classList.remove('confirm'); b.textContent='✕'; });
+      del.classList.add('confirm'); del.textContent='Delete?';
+    }
+    return;
+  }
+  // tapping anywhere else cancels an armed delete
+  const armed=document.querySelector('.del-btn.confirm');
+  if(armed){ armed.classList.remove('confirm'); armed.textContent='✕'; }
+
+  const head=e.target.closest('[data-toggle]');
+  if(head){
+    const name=head.getAttribute('data-toggle');
+    if(openSet.has(name)) openSet.delete(name); else openSet.add(name);
+    render(); return;
+  }
+  if(editing) return;
+  const chip=e.target.closest('.chip');
+  if(!chip) return;
+  toggleDone(chip.getAttribute('data-pid'),chip.getAttribute('data-freq'));
+  render();
+});
+
+document.getElementById('expandAll').addEventListener('click',()=>{
+  state.customers.forEach(c=>{
+    const has=state.products.some(p=>p.customer===c.name);
+    if(has||c.other||editing) openSet.add(c.name);
+  });
+  render();
+});
+document.getElementById('collapseAll').addEventListener('click',()=>{ openSet.clear(); render(); });
+
+const addSheet=document.getElementById('addSheet');
+const custSelect=document.getElementById('custSelect');
+const sampleName=document.getElementById('sampleName');
+const addHint=document.getElementById('addHint');
+const otherFreqWrap=document.getElementById('otherFreqWrap');
+let otherFreq='monthly';
+
+const roomWrap=document.getElementById('roomWrap');
+const roomSelect=document.getElementById('roomSelect');
+function refreshAddSheet(){
+  const c=getCust(custSelect.value);
+  const isOther = !!(c&&c.other);
+  // Room shown for everyone except KFC. Other gets a "None" option too.
+  roomWrap.classList.toggle('hidden', !hasRooms(custSelect.value));
+  // rebuild room options: include "None" only for Other
+  const opts = (isOther ? [{key:'none',label:'None'}] : []).concat(ROOMS.map(r=>({key:r.key,label:r.label})));
+  roomSelect.innerHTML = opts.map(o=>`<option value="${o.key}">${o.label}</option>`).join('');
+  if(isOther){
+    otherFreqWrap.classList.remove('hidden');
+    addHint.textContent='Other is for swabs, allergen and extras. Pick weekly or monthly — the item goes into just that section. Room can be None.';
+  }else{
+    otherFreqWrap.classList.add('hidden');
+    const f=c?c.freqs:[];
+    addHint.textContent=f.length
+      ? `${custSelect.value} is sampled ${f.join(' + ')}. The product appears in ${f.length>1?'both sections':'that section'}.`
+      : `${custSelect.value} has no frequency set — set W/M in the Menu first.`;
+  }
+}
+function setOtherFreq(f){
+  otherFreq=f;
+  document.querySelectorAll('#otherFreqSeg button').forEach(b=>b.classList.toggle('on',b.getAttribute('data-freq')===f));
+}
+document.getElementById('otherFreqSeg').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(b) setOtherFreq(b.getAttribute('data-freq'));
+});
+function openAdd(){
+  custSelect.innerHTML=state.customers.map(c=>`<option>${esc(c.name)}</option>`).join('');
+  sampleName.value=''; setOtherFreq('monthly'); refreshAddSheet();
+  addSheet.classList.add('show'); setTimeout(()=>sampleName.focus(),250);
+}
+custSelect.addEventListener('change',refreshAddSheet);
+document.getElementById('addBtn').addEventListener('click',openAdd);
+document.getElementById('cancelAdd').addEventListener('click',()=>addSheet.classList.remove('show'));
+document.getElementById('saveAdd').addEventListener('click',()=>{
+  const name=sampleName.value.trim();
+  if(!name){ alert('Give the product a name.'); return; }
+  const c=getCust(custSelect.value);
+  const prod={ id:Date.now().toString(36)+Math.random().toString(36).slice(2,6), customer:custSelect.value, name };
+  if(c&&c.other) prod.freq=otherFreq;
+  if(hasRooms(custSelect.value)) prod.room=document.getElementById('roomSelect').value;
+  state.products.push(prod);
+  openSet.add(custSelect.value);
+  save(); addSheet.classList.remove('show'); render();
+});
+
+const menuSheet=document.getElementById('menuSheet');
+function renderCustList(){
+  const el=document.getElementById('custList');
+  el.innerHTML=state.customers.map((c,i)=>`
+    <div class="cust-row">
+      <span class="cr-name">${esc(c.name)}${c.other?' <span class="cust-badges">bucket</span>':''}</span>
+      <div style="display:flex; gap:5px;" class="${c.other?'locked':''}">
+        <span class="mini ${c.freqs.includes('weekly')?'on-weekly':''}"  data-freq="weekly"  data-ci="${i}">W</span>
+        <span class="mini ${c.freqs.includes('monthly')?'on-monthly':''}" data-freq="monthly" data-ci="${i}">M</span>
+      </div>
+      ${c.other?'':`<button class="cust-del" data-delci="${i}">✕</button>`}
+    </div>`).join('');
+}
+document.getElementById('custList').addEventListener('click',e=>{
+  const mini=e.target.closest('.mini');
+  if(mini){
+    const i=+mini.getAttribute('data-ci'),f=mini.getAttribute('data-freq'),c=state.customers[i];
+    if(c.other) return;
+    if(c.freqs.includes(f)) c.freqs=c.freqs.filter(x=>x!==f); else c.freqs.push(f);
+    c.freqs.sort((a,b)=>a==='weekly'?-1:1);
+    save(); renderCustList(); render(); return;
+  }
+  const del=e.target.closest('[data-delci]');
+  if(del){
+    const i=+del.getAttribute('data-delci'),c=state.customers[i];
+    const n=state.products.filter(p=>p.customer===c.name).length;
+    if(confirm(`Delete customer "${c.name}"${n?` and its ${n} product(s)`:''}?`)){
+      state.products=state.products.filter(p=>p.customer!==c.name);
+      state.customers.splice(i,1); save(); renderCustList(); render();
+    }
+  }
+});
+document.getElementById('addCustBtn').addEventListener('click',()=>{
+  const input=document.getElementById('newCustName'); const name=input.value.trim();
+  if(!name) return;
+  if(state.customers.some(c=>c.name.toLowerCase()===name.toLowerCase())){ alert('That customer already exists.'); return; }
+  const otherIdx=state.customers.findIndex(c=>c.other);
+  const nc={name,freqs:['monthly']};
+  if(otherIdx>=0) state.customers.splice(otherIdx,0,nc); else state.customers.push(nc);
+  input.value=''; save(); renderCustList(); render();
+});
+document.getElementById('menuBtn').addEventListener('click',()=>{ renderCustList(); menuSheet.classList.add('show'); });
+document.getElementById('closeMenu').addEventListener('click',()=>menuSheet.classList.remove('show'));
+document.getElementById('editToggle').addEventListener('click',()=>{ editing=!editing; menuSheet.classList.remove('show'); render(); });
+[addSheet,menuSheet].forEach(s=>s.addEventListener('click',e=>{ if(e.target===s) s.classList.remove('show'); }));
+
+document.getElementById('exportBtn').addEventListener('click',()=>{
+  const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a'); const d=new Date();
+  a.href=url; a.download=`sample-tracker-backup-${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}.json`;
+  a.click(); URL.revokeObjectURL(url);
+});
+document.getElementById('importBtn').addEventListener('click',()=>document.getElementById('importFile').click());
+document.getElementById('importFile').addEventListener('change',e=>{
+  const file=e.target.files[0]; if(!file) return; const r=new FileReader();
+  r.onload=()=>{ try{
+    const data=JSON.parse(r.result);
+    if(!data.customers||!data.products) throw 0; if(!data.ticks) data.ticks={};
+    if(confirm('Replace all current data with this backup?')){ state=data; save(); menuSheet.classList.remove('show'); render(); alert('Backup restored.'); }
+  }catch(err){ alert('That file could not be read as a backup.'); } e.target.value=''; };
+  r.readAsText(file);
+});
+
+render();
+</script>
+</body>
+</html>
