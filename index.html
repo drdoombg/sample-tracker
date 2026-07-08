@@ -380,17 +380,8 @@ function weekKey(d=new Date()){
 }
 function monthKey(d=new Date()){ return d.getFullYear()+'-'+(d.getMonth()+1); }
 
-function load(){
-  try{
-    const raw=localStorage.getItem(STORE_KEY);
-    if(raw){
-      const s=JSON.parse(raw);
-      // migrate: ensure schedule structures exist
-      if(!s.nutri) s.nutri=[];
-      if(!s.shelf) s.shelf=[];
-      return s;
-    }
-  }catch(e){}
+// The app's built-in structure. Bump/adjust here when the app changes.
+function defaultState(){
   return {
     customers:[
       {name:'Aldi',freqs:['monthly']},{name:'Asda',freqs:['monthly']},
@@ -404,6 +395,48 @@ function load(){
     // schedule entries: { id, pid?, name, customer, month:0-11, doneYear?, doneDate? }
     nutri:[], shelf:[]
   };
+}
+// Names of the built-in customers whose STRUCTURE (frequencies, flags) the app owns.
+const BUILTIN_CUSTOMERS = defaultState().customers.map(c=>c.name);
+
+function load(){
+  try{
+    const raw=localStorage.getItem(STORE_KEY);
+    if(raw){
+      const s=JSON.parse(raw);
+      if(!s.nutri) s.nutri=[];
+      if(!s.shelf) s.shelf=[];
+      return s;
+    }
+  }catch(e){}
+  return defaultState();
+}
+
+// Merge an imported backup's DATA into the app's current STRUCTURE.
+// - products / ticks / nutri / shelf come from the backup (your real work)
+// - built-in customers keep the CURRENT app's frequencies + flags (fixes e.g. KFC)
+// - any EXTRA customers you added in the backup are carried over as-is
+function mergeImport(data){
+  const fresh = defaultState();
+  const result = {
+    customers: fresh.customers.map(c=>({...c})),  // app-owned structure, current & correct
+    products: Array.isArray(data.products) ? data.products : [],
+    ticks: (data.ticks && typeof data.ticks==='object') ? data.ticks : {},
+    nutri: Array.isArray(data.nutri) ? data.nutri : [],
+    shelf: Array.isArray(data.shelf) ? data.shelf : []
+  };
+  // carry over any custom (non-built-in) customers the user added in the backup
+  if(Array.isArray(data.customers)){
+    for(const c of data.customers){
+      if(!BUILTIN_CUSTOMERS.includes(c.name)){
+        // insert before Other so Other stays last
+        const otherIdx=result.customers.findIndex(x=>x.other);
+        const nc={name:c.name, freqs:Array.isArray(c.freqs)&&c.freqs.length?c.freqs:['monthly']};
+        if(otherIdx>=0) result.customers.splice(otherIdx,0,nc); else result.customers.push(nc);
+      }
+    }
+  }
+  return result;
 }
 function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
 function getCust(name){ return state.customers.find(c=>c.name===name); }
@@ -984,8 +1017,12 @@ document.getElementById('importFile').addEventListener('change',e=>{
   const file=e.target.files[0]; if(!file) return; const r=new FileReader();
   r.onload=()=>{ try{
     const data=JSON.parse(r.result);
-    if(!data.customers||!data.products) throw 0; if(!data.ticks) data.ticks={};
-    if(confirm('Replace all current data with this backup?')){ state=data; save(); menuSheet.classList.remove('show'); render(); alert('Backup restored.'); }
+    if(!data.customers||!data.products) throw 0;
+    // Merge: keep the CURRENT app structure, pull in the backup's data.
+    // This is what you want when the app has been updated since the backup.
+    state = mergeImport(data);
+    save(); menuSheet.classList.remove('show'); render();
+    alert('Backup imported. Your products, ticks and schedules are restored, using the current app version.');
   }catch(err){ alert('That file could not be read as a backup.'); } e.target.value=''; };
   r.readAsText(file);
 });
