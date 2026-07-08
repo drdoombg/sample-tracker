@@ -180,6 +180,18 @@
   .room-edit { background:var(--bg); border:1px solid var(--line); color:var(--ink);
     border-radius:8px; padding:5px 6px; font-size:12px; max-width:120px; }
   body:not(.editing) .room-edit-wrap { display:none; }
+  /* schedule pick-list */
+  .pick-list { max-height:280px; overflow-y:auto; margin-top:4px; }
+  .pick-item { display:flex; align-items:center; gap:10px; padding:11px 12px; margin-bottom:6px;
+    background:var(--bg); border:1px solid var(--line); border-radius:10px; cursor:pointer; }
+  .pick-item.picked { border-color:var(--done); background:var(--done-bg); }
+  .pick-item .pi-check { width:20px; height:20px; border-radius:5px; border:2px solid var(--line);
+    flex-shrink:0; display:grid; place-items:center; font-size:12px; color:#06231a; }
+  .pick-item.picked .pi-check { background:var(--done); border-color:var(--done); }
+  .pick-item .pi-cust { font-size:11px; color:var(--ink-dim); }
+  .pick-item .pi-name { font-size:14px; flex:1; }
+  .sched-name-row-wrap { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
+  .sched-name-row-wrap input { flex:1; margin:0; }
 </style>
 </head>
 <body>
@@ -215,17 +227,52 @@
 <!-- add-to-schedule sheet (nutritional/shelf) -->
 <div class="backdrop" id="schedSheet">
   <div class="sheet">
-    <h2 id="schedTitle">Add to schedule</h2>
+    <h2 id="schedTitle">Schedule tests</h2>
     <p class="hint" id="schedHint"></p>
-    <label>Pick an existing product, or type a one-off below</label>
-    <select id="schedProduct"></select>
-    <label>Or type a one-off item (optional)</label>
-    <input id="schedCustom" placeholder="leave blank to use the picked product" autocomplete="off">
+
     <label>Month due</label>
     <select id="schedMonth"></select>
+
+    <!-- mode switch -->
+    <div class="seg" id="schedModeSeg" style="margin-top:14px;">
+      <button data-mode="pick" class="on">Pick from list</button>
+      <button data-mode="custom">Type items</button>
+    </div>
+
+    <!-- PICK mode: choose multiple existing products -->
+    <div id="schedPickWrap">
+      <label>Tap products to add them to this month</label>
+      <div id="schedPickList" class="pick-list"></div>
+    </div>
+
+    <!-- CUSTOM mode: customer + typed product rows -->
+    <div id="schedCustomWrap" class="hidden">
+      <label>Customer</label>
+      <select id="schedCustomer"></select>
+      <label>Product name(s)</label>
+      <div id="schedNameRows">
+        <input class="sched-name-row" placeholder="e.g. Breast fillet" autocomplete="off">
+      </div>
+      <button class="btn ghost" id="schedAddAnother" style="width:100%; margin-top:8px; font-size:14px; padding:11px;">＋ add another</button>
+    </div>
+
     <div class="sheet-actions">
       <button class="btn ghost" id="schedCancel">Cancel</button>
-      <button class="btn primary" id="schedSave">Add</button>
+      <button class="btn primary" id="schedSave">Add to month</button>
+    </div>
+  </div>
+</div>
+
+<!-- move-month sheet (simpler, separate) -->
+<div class="backdrop" id="moveSheet">
+  <div class="sheet">
+    <h2>Move to another month</h2>
+    <p class="hint" id="moveHint"></p>
+    <label>New month</label>
+    <select id="moveMonthSelect"></select>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="moveCancel">Cancel</button>
+      <button class="btn primary" id="moveSave">Move</button>
     </div>
   </div>
 </div>
@@ -754,73 +801,128 @@ document.getElementById('saveAdd').addEventListener('click',()=>{
 
 /* ---------- schedule sheet (nutritional / shelf-life) ---------- */
 const schedSheet=document.getElementById('schedSheet');
-const schedProduct=document.getElementById('schedProduct');
-const schedCustom=document.getElementById('schedCustom');
 const schedMonth=document.getElementById('schedMonth');
+const schedModeSeg=document.getElementById('schedModeSeg');
+const schedPickWrap=document.getElementById('schedPickWrap');
+const schedPickList=document.getElementById('schedPickList');
+const schedCustomWrap=document.getElementById('schedCustomWrap');
+const schedCustomer=document.getElementById('schedCustomer');
+const schedNameRows=document.getElementById('schedNameRows');
 let schedTab='nutri';
-let moveMode=null; // {tab,id} when moving an existing entry
+let schedMode='pick';
+let picked=new Set(); // product ids selected in pick mode
 
 function fillMonthSelect(sel, selected){
   sel.innerHTML=MONTHS.map((m,i)=>`<option value="${i}" ${i===selected?'selected':''}>${m}</option>`).join('');
 }
+function setSchedMode(m){
+  schedMode=m;
+  schedModeSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.getAttribute('data-mode')===m));
+  schedPickWrap.classList.toggle('hidden', m!=='pick');
+  schedCustomWrap.classList.toggle('hidden', m!=='custom');
+}
+schedModeSeg.addEventListener('click',e=>{ const b=e.target.closest('button'); if(b) setSchedMode(b.getAttribute('data-mode')); });
+
+function makeSchedNameRow(showRemove){
+  const wrap=document.createElement('div');
+  wrap.className='sched-name-row-wrap';
+  wrap.innerHTML=`<input class="sched-name-row" placeholder="e.g. Breast fillet" autocomplete="off">
+    ${showRemove?'<button class="row-del">✕</button>':''}`;
+  wrap.querySelector('.row-del')?.addEventListener('click',()=>wrap.remove());
+  return wrap;
+}
+document.getElementById('schedAddAnother').addEventListener('click',()=>{
+  const row=makeSchedNameRow(true); schedNameRows.appendChild(row); row.querySelector('input').focus();
+});
+
+function renderPickList(){
+  if(state.products.length===0){
+    schedPickList.innerHTML=`<div class="none-yet">No products in your list yet. Use "Type items" instead.</div>`;
+    return;
+  }
+  // group by customer order
+  const order=state.customers.map(c=>c.name);
+  const sorted=[...state.products].sort((a,b)=>
+    (order.indexOf(a.customer)-order.indexOf(b.customer)) || 0);
+  schedPickList.innerHTML=sorted.map(p=>`
+    <div class="pick-item ${picked.has(p.id)?'picked':''}" data-pickid="${p.id}">
+      <div class="pi-check">${picked.has(p.id)?'✓':''}</div>
+      <div class="pi-name">${esc(p.name)}<div class="pi-cust">${esc(p.customer)}</div></div>
+    </div>`).join('');
+}
+schedPickList.addEventListener('click',e=>{
+  const it=e.target.closest('[data-pickid]'); if(!it) return;
+  const id=it.getAttribute('data-pickid');
+  if(picked.has(id)){ picked.delete(id); it.classList.remove('picked'); it.querySelector('.pi-check').textContent=''; }
+  else { picked.add(id); it.classList.add('picked'); it.querySelector('.pi-check').textContent='✓'; }
+});
+
+// Customer options for custom mode: routine customers (minus Other bucket dupes) + Trial
+function fillSchedCustomer(){
+  const names=state.customers.map(c=>c.name).filter(n=>n!=='Other');
+  names.push('Trial','Other');
+  schedCustomer.innerHTML=names.map(n=>`<option>${esc(n)}</option>`).join('');
+}
+
 function openSchedSheet(tab){
-  schedTab=tab; moveMode=null;
-  document.getElementById('schedTitle').textContent = (tab==='nutri'?'Nutritional':'Shelf-Life')+' — schedule test';
-  document.getElementById('schedHint').textContent = `Pick a product (or type a one-off), then the month it's due in.`;
-  // product options grouped simply as "Customer — Product"
-  const opts=state.products.map(p=>`<option value="${p.id}">${esc(p.customer)} — ${esc(p.name)}</option>`).join('');
-  schedProduct.innerHTML = `<option value="">— pick a product —</option>`+opts;
-  schedProduct.parentElement && (schedProduct.disabled=false);
-  schedCustom.value='';
-  schedCustom.parentElement && schedCustom.removeAttribute('disabled');
-  document.querySelector('#schedSheet label[for]')?.removeAttribute('hidden');
-  // show product picker + custom (normal add mode)
-  schedProduct.closest('.sheet').querySelectorAll('label')[0].style.display='';
-  schedProduct.style.display=''; schedCustom.style.display='';
+  schedTab=tab; picked=new Set();
+  document.getElementById('schedTitle').textContent=(tab==='nutri'?'Nutritional':'Shelf-Life')+' — schedule tests';
+  document.getElementById('schedHint').textContent=`Add one or more items to a month. Pick from your list, or type items under a customer (including Trial).`;
   fillMonthSelect(schedMonth, viewMonth);
-  document.getElementById('schedSave').textContent='Add';
+  fillSchedCustomer();
+  schedNameRows.innerHTML=''; schedNameRows.appendChild(makeSchedNameRow(false));
+  setSchedMode('pick');
+  renderPickList();
   schedSheet.classList.add('show');
 }
-function openMoveMonth(tab, id){
-  const e=schedList(tab).find(x=>x.id===id); if(!e) return;
-  schedTab=tab; moveMode={tab,id};
-  document.getElementById('schedTitle').textContent='Move to another month';
-  const info=schedName(e);
-  document.getElementById('schedHint').textContent=`${info.name} — currently ${MONTHS[e.month]}. Choose a new month.`;
-  // hide product/custom pickers when just moving
-  const labels=schedProduct.closest('.sheet').querySelectorAll('label');
-  labels[0].style.display='none'; labels[1].style.display='none';
-  schedProduct.style.display='none'; schedCustom.style.display='none';
-  fillMonthSelect(schedMonth, e.month);
-  document.getElementById('schedSave').textContent='Move';
-  schedSheet.classList.add('show');
-}
-document.getElementById('schedCancel').addEventListener('click',()=>{ schedSheet.classList.remove('show'); restoreSchedPickers(); });
-schedSheet.addEventListener('click',e=>{ if(e.target===schedSheet){ schedSheet.classList.remove('show'); restoreSchedPickers(); } });
-function restoreSchedPickers(){
-  const labels=schedProduct.closest('.sheet').querySelectorAll('label');
-  labels[0].style.display=''; labels[1].style.display='';
-  schedProduct.style.display=''; schedCustom.style.display='';
-}
+document.getElementById('schedCancel').addEventListener('click',()=>schedSheet.classList.remove('show'));
+schedSheet.addEventListener('click',e=>{ if(e.target===schedSheet) schedSheet.classList.remove('show'); });
+
 document.getElementById('schedSave').addEventListener('click',()=>{
   const month=+schedMonth.value;
-  if(moveMode){
-    const e=schedList(moveMode.tab).find(x=>x.id===moveMode.id);
-    if(e){ e.month=month; save(); }
-    schedSheet.classList.remove('show'); restoreSchedPickers(); viewMonth=month; render(); return;
-  }
-  const custom=schedCustom.value.trim();
-  const pid=schedProduct.value;
-  if(!custom && !pid){ alert('Pick a product or type a one-off item.'); return; }
-  const entry={ id:Date.now().toString(36)+Math.random().toString(36).slice(2,6), month };
-  if(pid){
-    const p=state.products.find(x=>x.id===pid);
-    entry.pid=pid; entry.name=p?.name; entry.customer=p?.customer; entry.room=p?.room;
+  const arr=schedList(schedTab);
+  let added=0;
+  if(schedMode==='pick'){
+    for(const id of picked){
+      const p=state.products.find(x=>x.id===id); if(!p) continue;
+      arr.push({ id:Date.now().toString(36)+Math.random().toString(36).slice(2,6), month,
+                 pid:id, name:p.name, customer:p.customer, room:p.room });
+      added++;
+    }
+    if(added===0){ alert('Tap at least one product to add.'); return; }
   } else {
-    entry.name=custom; entry.customer='Other';
+    const cust=schedCustomer.value;
+    const names=[...schedNameRows.querySelectorAll('input')].map(i=>i.value.trim()).filter(Boolean);
+    if(names.length===0){ alert('Type at least one item name.'); return; }
+    for(const name of names){
+      arr.push({ id:Date.now().toString(36)+Math.random().toString(36).slice(2,6), month,
+                 name, customer:cust });
+      added++;
+    }
   }
-  schedList(schedTab).push(entry);
   save(); schedSheet.classList.remove('show'); viewMonth=month; render();
+});
+
+/* ---------- move-month sheet ---------- */
+const moveSheet=document.getElementById('moveSheet');
+const moveMonthSelect=document.getElementById('moveMonthSelect');
+let moveTarget=null; // {tab,id}
+function openMoveMonth(tab, id){
+  const e=schedList(tab).find(x=>x.id===id); if(!e) return;
+  moveTarget={tab,id};
+  const info=schedName(e);
+  document.getElementById('moveHint').textContent=`${info.name} — currently ${MONTHS[e.month]}.`;
+  fillMonthSelect(moveMonthSelect, e.month);
+  moveSheet.classList.add('show');
+}
+document.getElementById('moveCancel').addEventListener('click',()=>moveSheet.classList.remove('show'));
+moveSheet.addEventListener('click',e=>{ if(e.target===moveSheet) moveSheet.classList.remove('show'); });
+document.getElementById('moveSave').addEventListener('click',()=>{
+  if(!moveTarget) return;
+  const e=schedList(moveTarget.tab).find(x=>x.id===moveTarget.id);
+  const m=+moveMonthSelect.value;
+  if(e){ e.month=m; save(); }
+  moveSheet.classList.remove('show'); viewMonth=m; render();
 });
 
 
