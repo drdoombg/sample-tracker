@@ -192,6 +192,30 @@
   .pick-item .pi-name { font-size:14px; flex:1; }
   .sched-name-row-wrap { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
   .sched-name-row-wrap input { flex:1; margin:0; }
+  /* two-step pick accordions */
+  .pick-cust { border:1px solid var(--line); border-radius:10px; margin-bottom:6px; overflow:hidden; }
+  .pick-cust-head { display:flex; align-items:center; gap:10px; padding:11px 12px; cursor:pointer; background:var(--bg); }
+  .pick-cust-name { flex:1; font-size:14px; font-weight:600; }
+  .pick-badge { font-size:10px; font-weight:700; color:var(--done); background:var(--done-bg);
+    padding:3px 7px; border-radius:6px; }
+  .pick-cust-body { display:none; padding:8px; }
+  .pick-cust.open .pick-cust-body { display:block; }
+  .pick-cust .caret { width:8px; height:8px; border-right:2px solid var(--ink-dim); border-bottom:2px solid var(--ink-dim);
+    transform:rotate(-45deg); transition:transform .18s; }
+  .pick-cust.open .caret { transform:rotate(45deg); }
+  /* shelf-life pack info + selection */
+  .sched-body { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .pack-info { font-size:11px; color:var(--ink-dim); font-weight:600; }
+  .pack-check { width:24px; height:24px; border-radius:6px; border:2px solid var(--line);
+    flex-shrink:0; display:grid; place-items:center; font-size:13px; color:#06231a; }
+  .pack-check.on { background:var(--done); border-color:var(--done); }
+  .pack-bar { position:fixed; left:16px; right:16px; bottom:calc(84px + env(safe-area-inset-bottom));
+    z-index:29; background:var(--panel-2); border:1px solid var(--line); border-radius:12px;
+    padding:10px; display:none; gap:8px; box-shadow:0 8px 24px rgba(0,0,0,.4); }
+  .pack-bar.show { display:flex; }
+  .pack-bar button { flex:1; padding:11px; border-radius:9px; border:none; font-size:13px; font-weight:700; cursor:pointer;
+    background:var(--done); color:#06231a; }
+  .pack-bar button.ghost { background:var(--bg); color:var(--ink); border:1px solid var(--line); }
 </style>
 </head>
 <body>
@@ -219,10 +243,32 @@
     <button id="monthLabel" style="flex:2;">July</button>
     <button id="monthNext">›</button>
     <button id="testRemainingToggle">Remaining</button>
+    <button id="packModeToggle" class="hidden">Pack info</button>
   </div>
 </header>
 
 <main id="main"></main>
+
+<!-- pack-info action bar (shelf-life pack mode) -->
+<div class="pack-bar" id="packBar">
+  <button class="ghost" id="packSetSize">Set pack size</button>
+  <button class="ghost" id="packSetNum">Set pack number</button>
+  <button id="packDone">Done</button>
+</div>
+
+<!-- pack value input sheet -->
+<div class="backdrop" id="packSheet">
+  <div class="sheet">
+    <h2 id="packSheetTitle">Set value</h2>
+    <p class="hint" id="packSheetHint"></p>
+    <label id="packSheetLabel">Value</label>
+    <input id="packInput" autocomplete="off" placeholder="type value, or leave blank to clear">
+    <div class="sheet-actions">
+      <button class="btn ghost" id="packInputCancel">Cancel</button>
+      <button class="btn primary" id="packInputSave">Apply</button>
+    </div>
+  </div>
+</div>
 
 <!-- add-to-schedule sheet (nutritional/shelf) -->
 <div class="backdrop" id="schedSheet">
@@ -370,6 +416,8 @@ let currentTab = 'routine';         // 'routine' | 'nutri' | 'shelf'
 let remainingOnly = false;          // routine view filter
 let testRemainingOnly = false;      // test view filter
 let viewMonth = new Date().getMonth(); // 0-11, for nutritional/shelf tabs
+let packMode = false;               // shelf-life: bulk pack-info selection mode
+let packSel = new Set();            // selected shelf entry ids in pack mode
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
@@ -413,9 +461,9 @@ function load(){
 }
 
 // Merge an imported backup's DATA into the app's current STRUCTURE.
-// - products / ticks / nutri / shelf come from the backup (your real work)
-// - built-in customers keep the CURRENT app's frequencies + flags (fixes e.g. KFC)
-// - any EXTRA customers you added in the backup are carried over as-is
+// Built-in customers ALWAYS take the current app's frequencies/flags (so e.g.
+// KFC is forced back to weekly even if the backup says monthly). Products, ticks,
+// schedules, and any extra user-added customers are carried over from the backup.
 function mergeImport(data){
   const fresh = defaultState();
   const result = {
@@ -479,6 +527,13 @@ function render(){
   document.getElementById('remainingToggle').classList.toggle('on', remainingOnly);
   document.getElementById('testRemainingToggle').classList.toggle('on', testRemainingOnly);
   document.getElementById('monthLabel').textContent = MONTHS[viewMonth];
+  // pack-info mode is shelf-only
+  const packBtn=document.getElementById('packModeToggle');
+  packBtn.classList.toggle('hidden', currentTab!=='shelf');
+  packBtn.classList.toggle('on', packMode);
+  if(currentTab!=='shelf') packMode=false;
+  document.getElementById('packBar').classList.toggle('show', packMode && currentTab==='shelf');
+  document.getElementById('addBtn').classList.toggle('hidden', packMode); // hide FAB during pack select
 
   if (currentTab==='routine') renderRoutine();
   else renderTestTab(currentTab); // 'nutri' | 'shelf'
@@ -623,9 +678,24 @@ function schedChipHTML(tab, entry, info){
   const done=schedDone(entry);
   const roomCls = info.room?(roomInfo(info.room)?.cls||''):'';
   const dateBit = done && entry.doneDate ? `<span class="sched-date">✓ ${esc(entry.doneDate)}</span>` : '';
+  // pack info line (shelf-life only)
+  let packBit='';
+  if(tab==='shelf'){
+    const parts=[];
+    if(entry.packNum) parts.push('×'+esc(entry.packNum));
+    if(entry.packSize) parts.push('size '+esc(entry.packSize));
+    packBit = `<span class="pack-info">${parts.length?parts.join(' · '):'no pack info'}</span>`;
+  }
+  // pack-mode selection checkbox (shelf-life only)
+  const selBox = (tab==='shelf' && packMode)
+    ? `<div class="pack-check ${packSel.has(entry.id)?'on':''}" data-packsel="${entry.id}">${packSel.has(entry.id)?'✓':''}</div>`
+    : '';
   return `<div class="chip ${done?'done':''}" data-schedtab="${tab}" data-schedid="${entry.id}">
-    <div class="check">${CHECK_SVG}</div>
-    <span class="chip-name ${roomCls} ${info.delisted?'delisted':''}">${esc(info.name)}${info.delisted?' (delisted)':''}</span>
+    ${packMode&&tab==='shelf' ? selBox : `<div class="check">${CHECK_SVG}</div>`}
+    <div class="sched-body">
+      <span class="chip-name ${roomCls} ${info.delisted?'delisted':''}">${esc(info.name)}${info.delisted?' (delisted)':''}</span>
+      ${packBit}
+    </div>
     ${dateBit}
     <button class="sched-move" data-movetab="${tab}" data-moveid="${entry.id}">Move month</button>
     <button class="sched-del" data-deltab="${tab}" data-delid="${entry.id}">✕</button>
@@ -652,6 +722,15 @@ main.addEventListener('click',e=>{
       document.querySelectorAll('.sched-del.confirm').forEach(b=>{ b.classList.remove('confirm'); b.textContent='✕'; });
       sdel.classList.add('confirm'); sdel.textContent='Delete?';
     }
+    return;
+  }
+  // pack-mode: toggle selection of a shelf entry
+  const psel=e.target.closest('[data-packsel]');
+  if(psel){
+    e.stopPropagation();
+    const id=psel.getAttribute('data-packsel');
+    if(packSel.has(id)){ packSel.delete(id); psel.classList.remove('on'); psel.textContent=''; }
+    else { packSel.add(id); psel.classList.add('on'); psel.textContent='✓'; }
     return;
   }
   // schedule: move to another month
@@ -685,9 +764,10 @@ main.addEventListener('click',e=>{
     render(); return;
   }
   if(editing) return;
-  // schedule chip tick
+  // schedule chip tick (disabled while in pack-info select mode)
   const schip=e.target.closest('[data-schedid]');
   if(schip){
+    if(packMode) return; // in pack mode, taps are for selection only
     toggleSchedDone(schip.getAttribute('data-schedtab'), schip.getAttribute('data-schedid'));
     return;
   }
@@ -740,7 +820,7 @@ document.querySelectorAll('.mtab').forEach(t=>t.addEventListener('click',()=>{
   document.querySelectorAll('.mtab').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');
   currentTab=t.getAttribute('data-tab');
-  editing=false; sorting=false; // leave management modes when switching tabs
+  editing=false; sorting=false; packMode=false; packSel.clear(); // leave management modes when switching tabs
   render();
 }));
 // remaining toggles
@@ -750,6 +830,37 @@ document.getElementById('testRemainingToggle').addEventListener('click',()=>{ te
 document.getElementById('monthPrev').addEventListener('click',()=>{ viewMonth=(viewMonth+11)%12; render(); });
 document.getElementById('monthNext').addEventListener('click',()=>{ viewMonth=(viewMonth+1)%12; render(); });
 document.getElementById('monthLabel').addEventListener('click',()=>{ viewMonth=new Date().getMonth(); render(); });
+
+// pack-info mode (shelf-life)
+document.getElementById('packModeToggle').addEventListener('click',()=>{
+  packMode=!packMode; if(!packMode) packSel.clear(); render();
+});
+document.getElementById('packDone').addEventListener('click',()=>{ packMode=false; packSel.clear(); render(); });
+document.getElementById('packSetSize').addEventListener('click',()=>openPackInput('packSize','pack size','e.g. S4'));
+document.getElementById('packSetNum').addEventListener('click',()=>openPackInput('packNum','number of packs','e.g. 33'));
+let packField=null;
+const packSheet=document.getElementById('packSheet');
+function openPackInput(field, labelText, placeholder){
+  if(packSel.size===0){ alert('Select at least one item first.'); return; }
+  packField=field;
+  document.getElementById('packSheetTitle').textContent='Set '+labelText;
+  document.getElementById('packSheetHint').textContent=`Applies to the ${packSel.size} selected item(s). Leave blank to clear.`;
+  document.getElementById('packSheetLabel').textContent=labelText;
+  const inp=document.getElementById('packInput');
+  inp.value=''; inp.placeholder=placeholder;
+  packSheet.classList.add('show');
+  setTimeout(()=>inp.focus(),250);
+}
+document.getElementById('packInputCancel').addEventListener('click',()=>packSheet.classList.remove('show'));
+packSheet.addEventListener('click',e=>{ if(e.target===packSheet) packSheet.classList.remove('show'); });
+document.getElementById('packInputSave').addEventListener('click',()=>{
+  const v=document.getElementById('packInput').value.trim();
+  for(const id of packSel){
+    const e=state.shelf.find(x=>x.id===id);
+    if(e){ if(v) e[packField]=v; else delete e[packField]; }
+  }
+  save(); packSheet.classList.remove('show'); render();
+});
 
 const addSheet=document.getElementById('addSheet');
 const custSelect=document.getElementById('custSelect');
@@ -868,26 +979,63 @@ document.getElementById('schedAddAnother').addEventListener('click',()=>{
   const row=makeSchedNameRow(true); schedNameRows.appendChild(row); row.querySelector('input').focus();
 });
 
+let pickOpenCust=null; // which customer is expanded in the pick list
 function renderPickList(){
   if(state.products.length===0){
     schedPickList.innerHTML=`<div class="none-yet">No products in your list yet. Use "Type items" instead.</div>`;
     return;
   }
-  // group by customer order
   const order=state.customers.map(c=>c.name);
-  const sorted=[...state.products].sort((a,b)=>
-    (order.indexOf(a.customer)-order.indexOf(b.customer)) || 0);
-  schedPickList.innerHTML=sorted.map(p=>`
-    <div class="pick-item ${picked.has(p.id)?'picked':''}" data-pickid="${p.id}">
-      <div class="pi-check">${picked.has(p.id)?'✓':''}</div>
-      <div class="pi-name">${esc(p.name)}<div class="pi-cust">${esc(p.customer)}</div></div>
-    </div>`).join('');
+  // customers that actually have products, in app order
+  const custs=[...new Set(state.products.map(p=>p.customer))]
+    .sort((a,b)=>order.indexOf(a)-order.indexOf(b));
+  let html='';
+  for(const cust of custs){
+    const prods=state.products.filter(p=>p.customer===cust)
+      .sort((a,b)=>roomOrder(a.room)-roomOrder(b.room));
+    const pickedCount=prods.filter(p=>picked.has(p.id)).length;
+    const open = pickOpenCust===cust;
+    html+=`<div class="pick-cust ${open?'open':''}">
+      <div class="pick-cust-head" data-pickcust="${esc(cust)}">
+        <span class="caret"></span>
+        <span class="pick-cust-name">${esc(cust)}</span>
+        ${pickedCount>0?`<span class="pick-badge">${pickedCount} picked</span>`:''}
+      </div>
+      <div class="pick-cust-body">
+        ${prods.map(p=>{
+          const cls=p.room?(roomInfo(p.room)?.cls||''):'';
+          return `<div class="pick-item ${picked.has(p.id)?'picked':''}" data-pickid="${p.id}">
+            <div class="pi-check">${picked.has(p.id)?'✓':''}</div>
+            <span class="pi-name ${cls}">${esc(p.name)}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+  schedPickList.innerHTML=html;
 }
 schedPickList.addEventListener('click',e=>{
+  // expand/collapse a customer
+  const head=e.target.closest('[data-pickcust]');
+  if(head){
+    const c=head.getAttribute('data-pickcust');
+    pickOpenCust = (pickOpenCust===c) ? null : c;
+    renderPickList();
+    return;
+  }
+  // toggle a product pick (in place)
   const it=e.target.closest('[data-pickid]'); if(!it) return;
   const id=it.getAttribute('data-pickid');
   if(picked.has(id)){ picked.delete(id); it.classList.remove('picked'); it.querySelector('.pi-check').textContent=''; }
   else { picked.add(id); it.classList.add('picked'); it.querySelector('.pi-check').textContent='✓'; }
+  // update the customer's picked badge without full re-render
+  const body=it.closest('.pick-cust-body'); const head2=it.closest('.pick-cust')?.querySelector('.pick-cust-head');
+  if(head2){
+    const cnt=body.querySelectorAll('.pick-item.picked').length;
+    let badge=head2.querySelector('.pick-badge');
+    if(cnt>0){ if(!badge){ badge=document.createElement('span'); badge.className='pick-badge'; head2.appendChild(badge);} badge.textContent=cnt+' picked'; }
+    else if(badge){ badge.remove(); }
+  }
 });
 
 // Customer options for custom mode: routine customers (minus Other bucket dupes) + Trial
