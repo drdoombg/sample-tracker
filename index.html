@@ -70,7 +70,12 @@
   .chip:active { transform:scale(.994); }
   .chip.weekly  { border-left-color:var(--weekly); }
   .chip.monthly { border-left-color:var(--monthly); }
-  .chip.done { background:var(--done-bg); border-left-color:var(--done); opacity:.82; }
+  .chip.done { background:var(--done-bg); opacity:.82; }
+  /* keep the weekly/monthly ribbon colour even when ticked, so the W/M cue stays */
+  .chip.done.weekly  { border-left-color:var(--weekly); }
+  .chip.done.monthly { border-left-color:var(--monthly); }
+  /* schedule chips (no freq class) get the green ribbon when done */
+  .chip.done:not(.weekly):not(.monthly) { border-left-color:var(--done); }
   .check { width:23px; height:23px; border-radius:50%; border:2px solid var(--line);
     flex-shrink:0; display:grid; place-items:center; }
   .chip.done .check { border-color:var(--done); background:var(--done); }
@@ -150,6 +155,31 @@
   .cust-del { color:var(--danger); background:none; border:none; font-size:18px; cursor:pointer; padding:0 2px; }
   .locked { opacity:.5; pointer-events:none; }
   .hidden { display:none !important; }
+
+  /* main tabs */
+  .main-tabs { display:flex; gap:6px; margin-top:12px; background:var(--panel);
+    padding:4px; border-radius:12px; border:1px solid var(--line); }
+  .mtab { flex:1; text-align:center; padding:10px 4px; border-radius:9px; font-size:13px;
+    font-weight:600; color:var(--ink-dim); cursor:pointer; border:none; background:transparent; }
+  .mtab.active { background:var(--panel-2); color:var(--ink); }
+
+  #remainingToggle.on, #testRemainingToggle.on { background:var(--panel-2); color:var(--done); border-color:transparent; }
+  #monthLabel { font-weight:700; color:var(--ink); }
+
+  /* schedule chip: shows done date */
+  .chip .sched-date { font-size:11px; color:var(--done); flex-shrink:0; font-weight:600; }
+  .chip .sched-month { font-size:11px; color:var(--ink-dim); flex-shrink:0; font-weight:600; }
+  .chip-name.delisted { color:var(--ink-dim); font-style:italic; }
+  .sched-del { background:rgba(229,96,77,.12); border:1px solid rgba(229,96,77,.4); color:var(--danger);
+    height:30px; min-width:30px; border-radius:8px; font-size:14px; cursor:pointer; display:none; flex-shrink:0; }
+  body.editing .sched-del { display:block; }
+  .sched-move { background:var(--panel-2); border:1px solid var(--line); color:var(--ink);
+    height:30px; border-radius:8px; font-size:12px; cursor:pointer; display:none; flex-shrink:0; padding:0 8px; }
+  body.editing .sched-move { display:block; }
+  .room-edit-wrap { flex-shrink:0; }
+  .room-edit { background:var(--bg); border:1px solid var(--line); color:var(--ink);
+    border-radius:8px; padding:5px 6px; font-size:12px; max-width:120px; }
+  body:not(.editing) .room-edit-wrap { display:none; }
 </style>
 </head>
 <body>
@@ -162,13 +192,43 @@
     </div>
     <button class="icon-btn" id="menuBtn">Menu</button>
   </div>
-  <div class="toolbar">
+  <div class="main-tabs">
+    <button class="mtab active" data-tab="routine">Routine</button>
+    <button class="mtab" data-tab="nutri">Nutritional</button>
+    <button class="mtab" data-tab="shelf">Shelf-Life</button>
+  </div>
+  <div class="toolbar" id="routineToolbar">
     <button id="expandAll">Expand all</button>
     <button id="collapseAll">Collapse all</button>
+    <button id="remainingToggle">Remaining only</button>
+  </div>
+  <div class="toolbar hidden" id="testToolbar">
+    <button id="monthPrev">‹</button>
+    <button id="monthLabel" style="flex:2;">July</button>
+    <button id="monthNext">›</button>
+    <button id="testRemainingToggle">Remaining</button>
   </div>
 </header>
 
 <main id="main"></main>
+
+<!-- add-to-schedule sheet (nutritional/shelf) -->
+<div class="backdrop" id="schedSheet">
+  <div class="sheet">
+    <h2 id="schedTitle">Add to schedule</h2>
+    <p class="hint" id="schedHint"></p>
+    <label>Pick an existing product, or type a one-off below</label>
+    <select id="schedProduct"></select>
+    <label>Or type a one-off item (optional)</label>
+    <input id="schedCustom" placeholder="leave blank to use the picked product" autocomplete="off">
+    <label>Month due</label>
+    <select id="schedMonth"></select>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="schedCancel">Cancel</button>
+      <button class="btn primary" id="schedSave">Add</button>
+    </div>
+  </div>
+</div>
 
 <button class="fab" id="addBtn">+ Add product</button>
 
@@ -259,6 +319,12 @@ let state = load();
 let editing = false;
 let sorting = false;
 let openSet = new Set();
+let currentTab = 'routine';         // 'routine' | 'nutri' | 'shelf'
+let remainingOnly = false;          // routine view filter
+let testRemainingOnly = false;      // test view filter
+let viewMonth = new Date().getMonth(); // 0-11, for nutritional/shelf tabs
+
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 function weekKey(d=new Date()){
   const x=new Date(d.getFullYear(),d.getMonth(),d.getDate());
@@ -268,17 +334,28 @@ function weekKey(d=new Date()){
 function monthKey(d=new Date()){ return d.getFullYear()+'-'+(d.getMonth()+1); }
 
 function load(){
-  try{ const raw=localStorage.getItem(STORE_KEY); if(raw) return JSON.parse(raw); }catch(e){}
+  try{
+    const raw=localStorage.getItem(STORE_KEY);
+    if(raw){
+      const s=JSON.parse(raw);
+      // migrate: ensure schedule structures exist
+      if(!s.nutri) s.nutri=[];
+      if(!s.shelf) s.shelf=[];
+      return s;
+    }
+  }catch(e){}
   return {
     customers:[
       {name:'Aldi',freqs:['monthly']},{name:'Asda',freqs:['monthly']},
       {name:'Co-op',freqs:['weekly','monthly']},{name:'M&S',freqs:['monthly']},
-      {name:'KFC',freqs:['monthly']},{name:'Booth',freqs:['monthly']},
+      {name:'KFC',freqs:['weekly']},{name:'Booth',freqs:['monthly']},
       {name:'Iceland',freqs:['monthly']},{name:'Tesco',freqs:['weekly']},
       {name:'Ocado',freqs:['monthly']},
       {name:'Other',freqs:['weekly','monthly'],other:true}
     ],
-    products:[], ticks:{}
+    products:[], ticks:{},
+    // schedule entries: { id, pid?, name, customer, month:0-11, doneYear?, doneDate? }
+    nutri:[], shelf:[]
   };
 }
 function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
@@ -314,17 +391,32 @@ function render(){
   document.getElementById('periodNote').textContent =
     `Week resets Mon · ${now.toLocaleDateString('en-GB',{month:'long'})} resets on the 1st`;
 
+  // toolbar + FAB label depend on tab
+  const isTest = currentTab!=='routine';
+  document.getElementById('routineToolbar').classList.toggle('hidden', isTest);
+  document.getElementById('testToolbar').classList.toggle('hidden', !isTest);
+  document.getElementById('addBtn').textContent = isTest ? '+ Schedule test' : '+ Add product';
+  document.getElementById('remainingToggle').classList.toggle('on', remainingOnly);
+  document.getElementById('testRemainingToggle').classList.toggle('on', testRemainingOnly);
+  document.getElementById('monthLabel').textContent = MONTHS[viewMonth];
+
+  if (currentTab==='routine') renderRoutine();
+  else renderTestTab(currentTab); // 'nutri' | 'shelf'
+}
+
+function renderRoutine(){
   if (state.products.length===0 && !editing){
     main.innerHTML=`<div class="empty">No products yet.<br>Tap <b>+ Add product</b> to start.<br><br>
       Co-op is weekly + monthly, Tesco weekly, the rest monthly. <b>Other</b> is for swabs, allergen and anything extra.</div>`;
     return;
   }
-
   let html='';
   for(const c of state.customers){
     const prods=state.products.filter(p=>p.customer===c.name);
     if (prods.length===0 && !editing && !c.other) continue;
     const {pend,total}=custPending(c);
+    // remaining-only: skip customers with nothing pending
+    if (remainingOnly && pend===0 && !editing) continue;
     const open=openSet.has(c.name);
     const badges=c.freqs.map(f=>f[0].toUpperCase()).join(' + ');
     const countHTML = total===0 ? `<span class="cust-count">—</span>`
@@ -339,25 +431,36 @@ function render(){
       <div class="cust-body">${sectionsHTML(c,prods)}</div>
     </div>`;
   }
-  main.innerHTML = html || `<div class="empty">Nothing to show.</div>`;
+  main.innerHTML = html || `<div class="empty">${remainingOnly?'Nothing remaining — all done. 🎉':'Nothing to show.'}</div>`;
 }
 
 function sectionsHTML(c,prods){
   let out='';
   for(const f of c.freqs){
-    const rows=[];
+    let rows=[];
     prods.forEach((p,idx)=>{
       for(const r of rowsForProduct(p,c)) if(r.freq===f){ r._idx=idx; rows.push(r); }
     });
+    // remaining-only filter (not while editing/sorting so you can still manage)
+    if(remainingOnly && !editing && !sorting) rows=rows.filter(r=>!isDone(r.pid,r.freq));
     out += `<div class="section-label ${f}">${f}</div>`;
-    if(rows.length===0){ out+=`<div class="none-yet">No ${f} products yet</div>`; }
-    else{
+    if(rows.length===0){
+      out+=`<div class="none-yet">${remainingOnly?'None remaining':'No '+f+' products yet'}</div>`;
+    } else {
       // order by room (FP1 → FP2 → Cutting → Deboning); within a room keep manual array order
       rows.sort((a,b)=> (roomOrder(a.room)-roomOrder(b.room)) || (a._idx-b._idx) );
       out += rows.map(r=>chipHTML(r,c,f)).join('');
     }
   }
   return out;
+}
+function roomEditorHTML(pid, room, custName){
+  if(custName==='KFC') return ''; // KFC has no rooms
+  const isOther = custName==='Other';
+  const opts=(isOther?[{key:'none',label:'None'}]:[]).concat(ROOMS.map(r=>({key:r.key,label:r.label})));
+  return `<select class="room-edit" data-roompid="${pid}">
+    ${opts.map(o=>`<option value="${o.key}" ${((room||(isOther?'none':''))===o.key)?'selected':''}>${o.label}</option>`).join('')}
+  </select>`;
 }
 function chipHTML(r,c,f){
   const done=isDone(r.pid,r.freq);
@@ -366,6 +469,7 @@ function chipHTML(r,c,f){
   return `<div class="chip ${r.freq} ${done?'done':''}" data-pid="${r.pid}" data-freq="${r.freq}">
     <div class="check">${CHECK_SVG}</div>
     <span class="chip-name ${nameCls}">${esc(r.name)}</span>
+    <span class="room-edit-wrap">${editing?roomEditorHTML(r.pid,r.room,c.name):''}</span>
     <div class="sort-arrows">
       <button class="arrow-btn" data-move="up"   data-pid="${r.pid}">▲</button>
       <button class="arrow-btn" data-move="down" data-pid="${r.pid}">▼</button>
@@ -375,6 +479,79 @@ function chipHTML(r,c,f){
 }
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
+/* ---------- schedule (nutritional / shelf-life) ---------- */
+function schedList(tab){ return tab==='nutri'?state.nutri:state.shelf; }
+function schedDone(entry){ return entry.doneYear === new Date().getFullYear(); }
+function toggleSchedDone(tab, id){
+  const e=schedList(tab).find(x=>x.id===id); if(!e) return;
+  const yr=new Date().getFullYear();
+  if(e.doneYear===yr){ e.doneYear=null; e.doneDate=null; }
+  else { e.doneYear=yr; e.doneDate=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
+  save(); render();
+}
+// resolve an entry's current display name + whether its product still exists
+function schedName(entry){
+  if(entry.pid){
+    const p=state.products.find(x=>x.id===entry.pid);
+    if(p) return { name:p.name, customer:p.customer, room:p.room, delisted:false };
+    return { name:entry.name||'(removed product)', customer:entry.customer, room:entry.room, delisted:true };
+  }
+  return { name:entry.name, customer:entry.customer||'Other', room:entry.room, delisted:false };
+}
+
+function renderTestTab(tab){
+  const list=schedList(tab).filter(e=>e.month===viewMonth);
+  const label = tab==='nutri'?'Nutritional':'Shelf-Life';
+  if(list.length===0){
+    main.innerHTML=`<div class="empty">No <b>${label}</b> tests scheduled for <b>${MONTHS[viewMonth]}</b>.<br><br>
+      Tap <b>+ Schedule test</b> to add products to this month.</div>`;
+    return;
+  }
+  // group by customer for consistency with routine
+  const byCust={};
+  for(const e of list){
+    const info=schedName(e);
+    (byCust[info.customer||'Other'] ||= []).push({e,info});
+  }
+  let visible=0, html='';
+  const order=state.customers.map(c=>c.name);
+  const custNames=Object.keys(byCust).sort((a,b)=>order.indexOf(a)-order.indexOf(b));
+  for(const cust of custNames){
+    let items=byCust[cust];
+    if(testRemainingOnly && !editing) items=items.filter(x=>!schedDone(x.e));
+    if(items.length===0) continue;
+    // order by room within customer
+    items.sort((a,b)=>roomOrder(a.info.room)-roomOrder(b.info.room));
+    const pend=byCust[cust].filter(x=>!schedDone(x.e)).length;
+    html += `<div class="cust open">
+      <div class="cust-head" style="cursor:default">
+        <span class="cust-name">${esc(cust)}</span>
+        <span class="cust-count ${pend>0?'needed':'clear'}">${pend>0?pend+' to do':'all done'}</span>
+      </div>
+      <div class="cust-body">${items.map(x=>schedChipHTML(tab,x.e,x.info)).join('')}</div>
+    </div>`;
+    visible+=items.length;
+  }
+  if(visible===0){
+    main.innerHTML=`<div class="empty">All ${label} tests for ${MONTHS[viewMonth]} are done. 🎉</div>`;
+    return;
+  }
+  main.innerHTML=html;
+}
+
+function schedChipHTML(tab, entry, info){
+  const done=schedDone(entry);
+  const roomCls = info.room?(roomInfo(info.room)?.cls||''):'';
+  const dateBit = done && entry.doneDate ? `<span class="sched-date">✓ ${esc(entry.doneDate)}</span>` : '';
+  return `<div class="chip ${done?'done':''}" data-schedtab="${tab}" data-schedid="${entry.id}">
+    <div class="check">${CHECK_SVG}</div>
+    <span class="chip-name ${roomCls} ${info.delisted?'delisted':''}">${esc(info.name)}${info.delisted?' (delisted)':''}</span>
+    ${dateBit}
+    <button class="sched-move" data-movetab="${tab}" data-moveid="${entry.id}">Move month</button>
+    <button class="sched-del" data-deltab="${tab}" data-delid="${entry.id}">✕</button>
+  </div>`;
+}
+
 main.addEventListener('click',e=>{
   // sort-mode arrows: move product within its room
   const mv=e.target.closest('[data-move]');
@@ -383,24 +560,42 @@ main.addEventListener('click',e=>{
     moveProduct(mv.getAttribute('data-pid'), mv.getAttribute('data-move'));
     return;
   }
+  // schedule: delete entry (two-tap)
+  const sdel=e.target.closest('[data-delid]');
+  if(sdel){
+    e.stopPropagation();
+    if(sdel.classList.contains('confirm')){
+      const tab=sdel.getAttribute('data-deltab'), id=sdel.getAttribute('data-delid');
+      const arr=schedList(tab); const i=arr.findIndex(x=>x.id===id);
+      if(i>=0){ arr.splice(i,1); save(); render(); }
+    } else {
+      document.querySelectorAll('.sched-del.confirm').forEach(b=>{ b.classList.remove('confirm'); b.textContent='✕'; });
+      sdel.classList.add('confirm'); sdel.textContent='Delete?';
+    }
+    return;
+  }
+  // schedule: move to another month
+  const smv=e.target.closest('[data-moveid]');
+  if(smv){
+    e.stopPropagation();
+    openMoveMonth(smv.getAttribute('data-movetab'), smv.getAttribute('data-moveid'));
+    return;
+  }
   const del=e.target.closest('[data-delpid]');
   if(del){
     e.stopPropagation();
-    // Two-tap confirm: first tap arms the button, second tap deletes.
     if(del.classList.contains('confirm')){
       const pid=del.getAttribute('data-delpid');
       state.products=state.products.filter(x=>x.id!==pid);
       Object.keys(state.ticks).forEach(k=>{ if(k.startsWith(pid+'|')) delete state.ticks[k]; });
       save(); render();
     } else {
-      // reset any other armed buttons, arm this one
       document.querySelectorAll('.del-btn.confirm').forEach(b=>{ b.classList.remove('confirm'); b.textContent='✕'; });
       del.classList.add('confirm'); del.textContent='Delete?';
     }
     return;
   }
-  // tapping anywhere else cancels an armed delete
-  const armed=document.querySelector('.del-btn.confirm');
+  const armed=document.querySelector('.del-btn.confirm, .sched-del.confirm');
   if(armed){ armed.classList.remove('confirm'); armed.textContent='✕'; }
 
   const head=e.target.closest('[data-toggle]');
@@ -410,10 +605,26 @@ main.addEventListener('click',e=>{
     render(); return;
   }
   if(editing) return;
+  // schedule chip tick
+  const schip=e.target.closest('[data-schedid]');
+  if(schip){
+    toggleSchedDone(schip.getAttribute('data-schedtab'), schip.getAttribute('data-schedid'));
+    return;
+  }
   const chip=e.target.closest('.chip');
   if(!chip) return;
   toggleDone(chip.getAttribute('data-pid'),chip.getAttribute('data-freq'));
   render();
+});
+
+// room reassignment (edit mode dropdown)
+main.addEventListener('change', e=>{
+  const rs=e.target.closest('[data-roompid]');
+  if(rs){
+    const pid=rs.getAttribute('data-roompid');
+    const p=state.products.find(x=>x.id===pid);
+    if(p){ p.room=rs.value; save(); render(); }
+  }
 });
 
 // Move a product up/down within its own customer+room block.
@@ -443,6 +654,22 @@ document.getElementById('expandAll').addEventListener('click',()=>{
   render();
 });
 document.getElementById('collapseAll').addEventListener('click',()=>{ openSet.clear(); render(); });
+
+// main tabs
+document.querySelectorAll('.mtab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.mtab').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  currentTab=t.getAttribute('data-tab');
+  editing=false; sorting=false; // leave management modes when switching tabs
+  render();
+}));
+// remaining toggles
+document.getElementById('remainingToggle').addEventListener('click',()=>{ remainingOnly=!remainingOnly; render(); });
+document.getElementById('testRemainingToggle').addEventListener('click',()=>{ testRemainingOnly=!testRemainingOnly; render(); });
+// month nav
+document.getElementById('monthPrev').addEventListener('click',()=>{ viewMonth=(viewMonth+11)%12; render(); });
+document.getElementById('monthNext').addEventListener('click',()=>{ viewMonth=(viewMonth+1)%12; render(); });
+document.getElementById('monthLabel').addEventListener('click',()=>{ viewMonth=new Date().getMonth(); render(); });
 
 const addSheet=document.getElementById('addSheet');
 const custSelect=document.getElementById('custSelect');
@@ -505,7 +732,10 @@ function openAdd(){
   setTimeout(()=>nameRows.querySelector('input')?.focus(),250);
 }
 custSelect.addEventListener('change',refreshAddSheet);
-document.getElementById('addBtn').addEventListener('click',openAdd);
+document.getElementById('addBtn').addEventListener('click',()=>{
+  if(currentTab==='routine') openAdd();
+  else openSchedSheet(currentTab);
+});
 document.getElementById('cancelAdd').addEventListener('click',()=>addSheet.classList.remove('show'));
 document.getElementById('saveAdd').addEventListener('click',()=>{
   const names=[...nameRows.querySelectorAll('input')].map(i=>i.value.trim()).filter(Boolean);
@@ -521,6 +751,78 @@ document.getElementById('saveAdd').addEventListener('click',()=>{
   openSet.add(custSelect.value);
   save(); addSheet.classList.remove('show'); render();
 });
+
+/* ---------- schedule sheet (nutritional / shelf-life) ---------- */
+const schedSheet=document.getElementById('schedSheet');
+const schedProduct=document.getElementById('schedProduct');
+const schedCustom=document.getElementById('schedCustom');
+const schedMonth=document.getElementById('schedMonth');
+let schedTab='nutri';
+let moveMode=null; // {tab,id} when moving an existing entry
+
+function fillMonthSelect(sel, selected){
+  sel.innerHTML=MONTHS.map((m,i)=>`<option value="${i}" ${i===selected?'selected':''}>${m}</option>`).join('');
+}
+function openSchedSheet(tab){
+  schedTab=tab; moveMode=null;
+  document.getElementById('schedTitle').textContent = (tab==='nutri'?'Nutritional':'Shelf-Life')+' — schedule test';
+  document.getElementById('schedHint').textContent = `Pick a product (or type a one-off), then the month it's due in.`;
+  // product options grouped simply as "Customer — Product"
+  const opts=state.products.map(p=>`<option value="${p.id}">${esc(p.customer)} — ${esc(p.name)}</option>`).join('');
+  schedProduct.innerHTML = `<option value="">— pick a product —</option>`+opts;
+  schedProduct.parentElement && (schedProduct.disabled=false);
+  schedCustom.value='';
+  schedCustom.parentElement && schedCustom.removeAttribute('disabled');
+  document.querySelector('#schedSheet label[for]')?.removeAttribute('hidden');
+  // show product picker + custom (normal add mode)
+  schedProduct.closest('.sheet').querySelectorAll('label')[0].style.display='';
+  schedProduct.style.display=''; schedCustom.style.display='';
+  fillMonthSelect(schedMonth, viewMonth);
+  document.getElementById('schedSave').textContent='Add';
+  schedSheet.classList.add('show');
+}
+function openMoveMonth(tab, id){
+  const e=schedList(tab).find(x=>x.id===id); if(!e) return;
+  schedTab=tab; moveMode={tab,id};
+  document.getElementById('schedTitle').textContent='Move to another month';
+  const info=schedName(e);
+  document.getElementById('schedHint').textContent=`${info.name} — currently ${MONTHS[e.month]}. Choose a new month.`;
+  // hide product/custom pickers when just moving
+  const labels=schedProduct.closest('.sheet').querySelectorAll('label');
+  labels[0].style.display='none'; labels[1].style.display='none';
+  schedProduct.style.display='none'; schedCustom.style.display='none';
+  fillMonthSelect(schedMonth, e.month);
+  document.getElementById('schedSave').textContent='Move';
+  schedSheet.classList.add('show');
+}
+document.getElementById('schedCancel').addEventListener('click',()=>{ schedSheet.classList.remove('show'); restoreSchedPickers(); });
+schedSheet.addEventListener('click',e=>{ if(e.target===schedSheet){ schedSheet.classList.remove('show'); restoreSchedPickers(); } });
+function restoreSchedPickers(){
+  const labels=schedProduct.closest('.sheet').querySelectorAll('label');
+  labels[0].style.display=''; labels[1].style.display='';
+  schedProduct.style.display=''; schedCustom.style.display='';
+}
+document.getElementById('schedSave').addEventListener('click',()=>{
+  const month=+schedMonth.value;
+  if(moveMode){
+    const e=schedList(moveMode.tab).find(x=>x.id===moveMode.id);
+    if(e){ e.month=month; save(); }
+    schedSheet.classList.remove('show'); restoreSchedPickers(); viewMonth=month; render(); return;
+  }
+  const custom=schedCustom.value.trim();
+  const pid=schedProduct.value;
+  if(!custom && !pid){ alert('Pick a product or type a one-off item.'); return; }
+  const entry={ id:Date.now().toString(36)+Math.random().toString(36).slice(2,6), month };
+  if(pid){
+    const p=state.products.find(x=>x.id===pid);
+    entry.pid=pid; entry.name=p?.name; entry.customer=p?.customer; entry.room=p?.room;
+  } else {
+    entry.name=custom; entry.customer='Other';
+  }
+  schedList(schedTab).push(entry);
+  save(); schedSheet.classList.remove('show'); viewMonth=month; render();
+});
+
 
 const menuSheet=document.getElementById('menuSheet');
 function renderCustList(){
