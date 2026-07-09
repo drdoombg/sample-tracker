@@ -180,6 +180,11 @@
   .room-edit { background:var(--bg); border:1px solid var(--line); color:var(--ink);
     border-radius:8px; padding:5px 6px; font-size:12px; max-width:120px; }
   body:not(.editing) .room-edit-wrap { display:none; }
+  .delist-btn { background:var(--panel-2); border:1px solid var(--line); color:var(--ink-dim);
+    height:30px; border-radius:8px; font-size:12px; cursor:pointer; display:none; flex-shrink:0; padding:0 10px; }
+  body.editing .delist-btn { display:block; }
+  .relist-btn { background:rgba(62,201,138,.14); border:1px solid var(--done); color:var(--done);
+    height:32px; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; flex-shrink:0; padding:0 12px; }
   /* schedule pick-list */
   .pick-list { max-height:280px; overflow-y:auto; margin-top:4px; }
   .pick-item { display:flex; align-items:center; gap:10px; padding:11px 12px; margin-bottom:6px;
@@ -502,9 +507,11 @@ function toggleDone(pid,freq){
   const k=tickKey(pid,freq); const now=freq==='weekly'?weekKey():monthKey();
   state.ticks[k]=(state.ticks[k]===now)?null:now; save();
 }
+// products for a customer that are active in the routine cycle (not delisted)
+function activeProducts(custName){ return state.products.filter(p=>p.customer===custName && !p.delisted); }
 function custPending(c){
   let pend=0,total=0;
-  for(const p of state.products.filter(p=>p.customer===c.name)){
+  for(const p of activeProducts(c.name)){
     for(const r of rowsForProduct(p,c)){ total++; if(!isDone(r.pid,r.freq)) pend++; }
   }
   return {pend,total};
@@ -547,7 +554,7 @@ function renderRoutine(){
   }
   let html='';
   for(const c of state.customers){
-    const prods=state.products.filter(p=>p.customer===c.name);
+    const prods=activeProducts(c.name);
     if (prods.length===0 && !editing && !c.other) continue;
     const {pend,total}=custPending(c);
     // remaining-only: skip customers with nothing pending
@@ -564,6 +571,29 @@ function renderRoutine(){
         ${countHTML}
       </div>
       <div class="cust-body">${sectionsHTML(c,prods)}</div>
+    </div>`;
+  }
+  // delisted section (only in edit mode)
+  if(editing){
+    const delisted=state.products.filter(p=>p.delisted);
+    const open=openSet.has('__delisted__');
+    html += `<div class="cust ${open?'open':''}" data-cust="__delisted__" style="border-style:dashed;">
+      <div class="cust-head" data-toggle="__delisted__">
+        <span class="caret"></span>
+        <span class="cust-name" style="color:var(--ink-dim)">Delisted <span class="cust-badges">${delisted.length}</span></span>
+        <span class="cust-count">${delisted.length?'tap to manage':'none'}</span>
+      </div>
+      <div class="cust-body">${
+        delisted.length===0
+          ? '<div class="none-yet">No delisted products. Use “Delist” on a product to hide it from Routine.</div>'
+          : delisted.map(p=>{
+              const cls=p.room?(roomInfo(p.room)?.cls||''):'';
+              return `<div class="chip" style="border-left-color:var(--line)">
+                <span class="chip-name ${cls}">${esc(p.name)}<span class="pi-cust" style="display:block">${esc(p.customer)}</span></span>
+                <button class="relist-btn" data-relistpid="${p.id}">Relist</button>
+              </div>`;
+            }).join('')
+      }</div>
     </div>`;
   }
   main.innerHTML = html || `<div class="empty">${remainingOnly?'Nothing remaining — all done. 🎉':'Nothing to show.'}</div>`;
@@ -605,6 +635,7 @@ function chipHTML(r,c,f){
     <div class="check">${CHECK_SVG}</div>
     <span class="chip-name ${nameCls}">${esc(r.name)}</span>
     <span class="room-edit-wrap">${editing?roomEditorHTML(r.pid,r.room,c.name):''}</span>
+    <button class="delist-btn" data-delistpid="${r.pid}">Delist</button>
     <div class="sort-arrows">
       <button class="arrow-btn" data-move="up"   data-pid="${r.pid}">▲</button>
       <button class="arrow-btn" data-move="down" data-pid="${r.pid}">▼</button>
@@ -708,6 +739,22 @@ main.addEventListener('click',e=>{
   if(mv){
     e.stopPropagation();
     moveProduct(mv.getAttribute('data-pid'), mv.getAttribute('data-move'));
+    return;
+  }
+  // delist a product (hide from routine)
+  const dl=e.target.closest('[data-delistpid]');
+  if(dl){
+    e.stopPropagation();
+    const p=state.products.find(x=>x.id===dl.getAttribute('data-delistpid'));
+    if(p){ p.delisted=true; save(); render(); }
+    return;
+  }
+  // relist a product (return to routine)
+  const rl=e.target.closest('[data-relistpid]');
+  if(rl){
+    e.stopPropagation();
+    const p=state.products.find(x=>x.id===rl.getAttribute('data-relistpid'));
+    if(p){ delete p.delisted; save(); render(); }
     return;
   }
   // schedule: delete entry (two-tap)
