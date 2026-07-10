@@ -2070,10 +2070,11 @@ function lineRenderWeeklyReport(){
 function lineAttachRoomSuggestions(rooms){
   rooms.forEach(room=>{
     room.lines.forEach(ln=>{
-      const current=ln.runs[ln.runs.length-1];
-      if(!current || current.down || !current.customer) return;
-      const remaining = lineRemainingSamplesForCustomer(current.customer);
-      current.suggestions = lineMatchRemaining(room.roomKey, current.product, remaining);
+      ln.runs.forEach(run=>{
+        if(run.down || !run.customer) return;
+        const remaining = lineRemainingSamplesForCustomer(run.customer);
+        run.suggestions = lineMatchRemaining(room.roomKey, run.product, remaining);
+      });
     });
   });
 }
