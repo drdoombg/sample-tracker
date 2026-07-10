@@ -308,6 +308,7 @@
   .line-upload-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px; }
   @media (max-width:520px){ .line-upload-row { grid-template-columns:1fr; } }
   .line-upload-zone-alt { border-style:solid; }
+  .line-upload-active { border-color:var(--weekly); background:var(--panel-2); }
   .line-weekly-report { background:var(--panel); border:1px solid var(--line); border-radius:12px;
     padding:14px 16px; margin-bottom:18px; }
   .line-weekly-title { font-size:13.5px; font-weight:700; margin-bottom:3px; }
@@ -553,6 +554,7 @@ let lineCollapsedCustomers = {};
 let lineExpandedRun = null;
 let lineExpandedSuggestion = null;
 let lineWeeklyReport = null; // { fileCount, neverRan: [{name, customer, room, source}] }
+let lineViewMode = 'daily'; // 'daily' | 'weekly' — which of the two uploaded views is showing
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
@@ -660,8 +662,8 @@ function render(){
   const isTest = currentTab==='nutri' || currentTab==='shelf';
   document.getElementById('routineToolbar').classList.toggle('hidden', currentTab!=='routine');
   document.getElementById('testToolbar').classList.toggle('hidden', !isTest);
-  document.getElementById('lineToolbar').classList.toggle('hidden', currentTab!=='line');
-  document.getElementById('lineToolbar2').classList.toggle('hidden', currentTab!=='line' || lineSubtab!=='rooms');
+  document.getElementById('lineToolbar').classList.toggle('hidden', currentTab!=='line' || lineViewMode!=='daily');
+  document.getElementById('lineToolbar2').classList.toggle('hidden', currentTab!=='line' || lineViewMode!=='daily' || lineSubtab!=='rooms');
   document.getElementById('addBtn').textContent = isTest ? '+ Schedule test' : '+ Add product';
   document.getElementById('addBtn').classList.toggle('hidden', currentTab==='line' || packMode);
   document.getElementById('remainingToggle').classList.toggle('on', remainingOnly);
@@ -1540,10 +1542,16 @@ function lineBuildRoomLineTimelines(records){
 
           // Pass 1: build raw runs where every down-check forms its own down-run
           // (consecutive down-checks merge together, but a down-check never joins
-          // a product run directly).
+          // a product run directly). Grouping key uses the alias-normalized product
+          // text (lineApplyNameAliases) so known name variants — "Extra Tasty Small"
+          // vs "Small Extra Tasty", "Garlic and Herb" vs "Garlic Herbs" — are
+          // recognized as the same run instead of splitting into two entries just
+          // because different shifts typed it differently. The displayed name still
+          // shows whatever was actually typed on the first check of the run.
           const rawRuns=[];
           checks.forEach(c=>{
-            const key=c.down?'__DOWN__':(c.product||'(unspecified product)')+'__'+(c.customer||'');
+            const normalizedProduct = c.product ? lineApplyNameAliases(c.product) : null;
+            const key=c.down?'__DOWN__':(normalizedProduct||'(unspecified product)')+'__'+(c.customer||'');
             const last=rawRuns[rawRuns.length-1];
             if(last && last.key===key){
               last.checks.push(c);
@@ -1646,6 +1654,20 @@ const LINE_MATCH_STOPWORDS = new Set([
   'deli','counter','joint','joints','fillet','fillets','portion','portions',
   'pack','piece','pieces','whole','bird','wholebird','strip','strips'
 ]);
+
+// Size words are exclusive selectors, not optional descriptors — "Large" and "Extra
+// Large" are different products, not the same product loosely described, even
+// though they share the word "large". Detected as a whole phrase (checked longest
+// first so "extra large" wins over a bare "large" inside it) and compared for exact
+// equality wherever either side has one, on top of the normal word-overlap check.
+const LINE_SIZE_PHRASES = ['extra large','extra small','large','medium','small'];
+function lineSizePhrase(name){
+  const lc=String(name||'').toLowerCase();
+  for(const phrase of LINE_SIZE_PHRASES){
+    if(new RegExp('\\b'+phrase+'\\b').test(lc)) return phrase;
+  }
+  return null;
+}
 
 // Known name-variant aliases — different ways the same product gets typed across the
 // portal export and the tracker's product list. Applied as whole-phrase replacements
@@ -1801,9 +1823,15 @@ function lineMatchRemaining(roomKey, runningProduct, remaining){
   // from the stopword set removed on purpose — "joints" needs its flavour word
   // alongside it, which the stopword list already enforces since "joint"/"joints"
   // sit in LINE_MATCH_STOPWORDS and can't trigger a match alone.
+  // Size words (Large/Medium/Small/Extra Large/Extra Small) are exclusive selectors:
+  // if either side has one, they must match EXACTLY — word-overlap alone would
+  // wrongly link "Large" to "Extra Large" since they share the word "large".
   const runningWords=new Set(lineWordsOf(runningProduct));
   if(runningWords.size===0) return [];
+  const runningSize=lineSizePhrase(runningProduct);
   return remaining.filter(r=>{
+    const rSize=lineSizePhrase(r.name);
+    if((runningSize||rSize) && runningSize!==rSize) return false;
     const rWords=lineWordsOf(r.name);
     return rWords.some(w=>runningWords.has(w));
   });
@@ -1982,6 +2010,7 @@ function lineHandleWeeklyFiles(files){
       return true;
     }).map(p=>({ ...p, flags: lineNutriShelfRemainingFlags(p.customer, p.roomKey, p.name) }));
     lineWeeklyReport = { fileCount: files.length, neverRan };
+    lineViewMode='weekly';
     render();
   });
 }
@@ -2033,7 +2062,7 @@ function lineAttachRoomSuggestions(rooms){
 
 function lineHandleFile(file){
   lineData.error=null;
-  lineWeeklyReport=null; // uploading today's export should always return to the live view
+  lineViewMode='daily'; // uploading today's export switches the view, doesn't discard the weekly report
   const reader=new FileReader();
   reader.onload=(e)=>{
     try{
@@ -2097,15 +2126,15 @@ function renderLineTab(){
   });
 
   let html = `<div class="line-upload-row">
-    <div class="line-upload-zone" id="lineUploadZone">
-      <div class="line-upload-title">${hasData?"Refresh with today's export":"Load the day's .xlsx export"}</div>
-      <div class="line-upload-sub">Full-day export · replaces current view</div>
+    <div class="line-upload-zone ${lineViewMode==='daily'?'line-upload-active':''}" id="lineUploadZone">
+      <div class="line-upload-title">${hasData?"Today's export":"Load the day's .xlsx export"}</div>
+      <div class="line-upload-sub">${hasData?'Tap to view · tap button to refresh':'Full-day export · replaces current view'}</div>
       <button class="btn primary line-upload-btn" id="lineUploadBtn2">Upload file</button>
       ${lineData.fileName?`<div class="line-filename">${lineData.fileName}</div>`:''}
     </div>
-    <div class="line-upload-zone line-upload-zone-alt" id="lineWeeklyZone">
-      <div class="line-upload-title">Upload weekly report</div>
-      <div class="line-upload-sub">One or more days' exports · shows what never ran</div>
+    <div class="line-upload-zone line-upload-zone-alt ${lineViewMode==='weekly'?'line-upload-active':''}" id="lineWeeklyZone">
+      <div class="line-upload-title">${lineWeeklyReport?'Weekly report':'Upload weekly report'}</div>
+      <div class="line-upload-sub">${lineWeeklyReport?'Tap to view · tap button to reload':"One or more days' exports · shows what never ran"}</div>
       <button class="btn line-upload-btn" id="lineWeeklyBtn2">Upload files</button>
       ${lineWeeklyReport?`<div class="line-filename">${lineWeeklyReport.fileCount} file${lineWeeklyReport.fileCount>1?'s':''} loaded</div>`:''}
     </div>
@@ -2115,11 +2144,19 @@ function renderLineTab(){
     html += `<div class="warn" style="margin-top:12px;">${lineData.error}</div>`;
   }
 
-  if(lineWeeklyReport){
-    html += lineRenderWeeklyReport();
+  if(lineViewMode==='weekly'){
+    if(lineWeeklyReport){
+      html += lineRenderWeeklyReport();
+    } else {
+      html += `<div class="empty">Upload one or more days' exports to see what never ran.</div>`;
+    }
+    main.innerHTML = html;
+    wireLineUpload();
+    return;
   }
 
-  if(!hasData && !lineData.error && !lineWeeklyReport){
+  // lineViewMode === 'daily' from here on
+  if(!hasData && !lineData.error){
     html += `<div class="empty">Upload an export to see room-by-room line timelines and current products by customer.</div>`;
     main.innerHTML = html;
     wireLineUpload();
@@ -2172,7 +2209,7 @@ function renderLineTab(){
           const sugKey = customer+'-'+i;
           const sugExpanded = lineExpandedSuggestion===sugKey;
           html += `<div class="line-cust-item">
-            <span class="line-room-tag ${item.roomCls}">${item.roomLabel} · Line ${item.line}</span>
+            <span class="line-room-tag ${item.roomCls}">${item.roomLabel} · ${/^\d+$/.test(String(item.line)) ? 'Line '+item.line : item.line}</span>
             <span class="line-cust-product">${item.product}</span>
             ${hasSuggestions ? `<span data-linesuggest="${sugKey}">${lineSuggestionIcons(item.suggestions)}</span>` : ''}
             <span class="line-cust-since mono">since ${lineFmtTime(item.start)}</span>
@@ -2199,10 +2236,11 @@ function lineRenderLineCard(roomKey, ln){
   const lkey=roomKey+'-'+ln.line;
   const lCollapsed=lineCollapsedLines[lkey];
   const current=ln.runs[ln.runs.length-1];
+  const lineDisplayName = /^\d+$/.test(String(ln.line)) ? 'Line '+ln.line : String(ln.line);
   let html = `<div class="line-linecard">
     <div class="line-linecard-head" data-lineline="${lkey}">
       <span class="caret ${lCollapsed?'':'open'}"></span>
-      <span class="line-linecard-name ${ln.alert?'line-alert':''}">Line ${ln.line}</span>
+      <span class="line-linecard-name ${ln.alert?'line-alert':''}">${lineDisplayName}</span>
       ${lCollapsed && current ? `<span class="line-collapsed-summary ${current.down?'down':''}">${current.down?current.downLabel:current.product}${current.customer?' ('+current.customer+')':''}</span>` : ''}
       <span class="line-lastcheck">last check ${lineFmtTime(ln.lastCheckTs)}</span>
     </div>`;
@@ -2291,12 +2329,19 @@ function lineRenderSuggestionDetail(suggestions){
 function wireLineUpload(){
   const zone=document.getElementById('lineUploadZone');
   const btn=document.getElementById('lineUploadBtn2');
+  const hasDaily = lineData.rooms || lineData.kfcEvents;
   if(btn) btn.addEventListener('click',(e)=>{ e.stopPropagation(); document.getElementById('lineImportFile').click(); });
-  if(zone) zone.addEventListener('click',()=>document.getElementById('lineImportFile').click());
+  if(zone) zone.addEventListener('click',()=>{
+    if(hasDaily){ lineViewMode='daily'; render(); }
+    else document.getElementById('lineImportFile').click();
+  });
   const wZone=document.getElementById('lineWeeklyZone');
   const wBtn=document.getElementById('lineWeeklyBtn2');
   if(wBtn) wBtn.addEventListener('click',(e)=>{ e.stopPropagation(); document.getElementById('lineWeeklyImportFile').click(); });
-  if(wZone) wZone.addEventListener('click',()=>document.getElementById('lineWeeklyImportFile').click());
+  if(wZone) wZone.addEventListener('click',()=>{
+    if(lineWeeklyReport){ lineViewMode='weekly'; render(); }
+    else document.getElementById('lineWeeklyImportFile').click();
+  });
 }
 function wireLineInteractions(){
   main.querySelectorAll('[data-lineroom]').forEach(el=>el.addEventListener('click',()=>{
