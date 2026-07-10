@@ -58,17 +58,11 @@
   .cust-body { display:none; padding:0 12px 10px; }
   .cust.open .cust-body { display:block; }
 
-  .section-label { height:1px; background:var(--line); margin:10px 0 8px; border:none;
-    display:flex; align-items:center; }
-  .section-label::before { content:''; width:7px; height:7px; border-radius:50%;
-    margin-left:4px; flex-shrink:0; }
-  .section-label.weekly::before  { background:var(--weekly); }
-  .section-label.monthly::before { background:var(--monthly); }
-
-  .chip { display:flex; align-items:center; gap:10px; background:var(--bg);
+  .section-label { height:1px; background:var(--line); margin:8px 0 6px; border:none; }
+  .chip { display:flex; align-items:center; gap:9px; background:var(--bg);
     border:1px solid var(--line); border-left:4px solid var(--line);
-    border-radius:9px; padding:8px 10px; margin-bottom:5px; cursor:pointer;
-    transition:background .12s,border-color .12s,opacity .12s; }
+    border-radius:8px; padding:6px 9px; margin-bottom:4px; cursor:pointer;
+    transition:background .12s,border-color .12s,opacity .12s; min-height:38px; }
   .chip:active { transform:scale(.994); }
   .chip.weekly  { border-left-color:var(--weekly); }
   .chip.monthly { border-left-color:var(--monthly); }
@@ -78,18 +72,18 @@
   .chip.done.monthly { border-left-color:var(--monthly); }
   /* schedule chips (no freq class) get the green ribbon when done */
   .chip.done:not(.weekly):not(.monthly) { border-left-color:var(--done); }
-  .check { width:19px; height:19px; border-radius:50%; border:2px solid var(--line);
+  .check { width:18px; height:18px; border-radius:50%; border:2px solid var(--line);
     flex-shrink:0; display:grid; place-items:center; }
   .chip.done .check { border-color:var(--done); background:var(--done); }
-  .check svg { width:11px; height:11px; display:none; }
+  .check svg { width:10px; height:10px; display:none; }
   .chip.done .check svg { display:block; }
-  .chip-name { flex:1; font-size:13.5px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chip-name { flex:1; font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .chip-name.room-fp1 { color:var(--room-fp1); }
   .chip-name.room-fp2 { color:var(--room-fp2); }
   .chip-name.room-cut { color:var(--room-cut); }
   .chip-name.room-deb { color:var(--room-deb); }
   .chip.done .chip-name { text-decoration:line-through; text-decoration-color:var(--done); opacity:.75; }
-  .room-note { font-size:11px; font-weight:600; color:var(--ink-dim); flex-shrink:0; }
+  .room-note { font-size:10.5px; font-weight:600; color:var(--ink-dim); flex-shrink:0; }
   .del-btn { background:rgba(229,96,77,.12); border:1px solid rgba(229,96,77,.4);
     color:var(--danger); font-size:16px; line-height:1; height:34px; min-width:34px; border-radius:9px;
     padding:0 8px; cursor:pointer; display:none; flex-shrink:0; align-items:center; justify-content:center;
@@ -286,10 +280,12 @@
   .line-cust-item:first-child { border-top:none; }
   .line-cust-product { font-size:13.5px; font-weight:600; }
   .line-cust-since { font-size:10.5px; color:var(--ink-dim); margin-left:auto; }
-  .line-due-icon { font-size:10px; cursor:pointer; margin-left:2px; }
-  .line-due-icon.routine { color:var(--weekly); }
-  .line-due-icon.nutri { color:var(--monthly); }
-  .line-due-icon.shelf { color:var(--room-cut); }
+  .line-due-icon { font-size:10px; font-weight:800; cursor:pointer; margin-left:2px;
+    display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px;
+    border-radius:4px; border:1px solid currentColor; }
+  .line-due-icon.routine { color:#e0c020; }
+  .line-due-icon.nutri { color:#4dc26a; }
+  .line-due-icon.shelf { color:var(--danger); }
   .line-due-detail { background:var(--panel-2); border:1px solid var(--line); border-radius:9px;
     padding:9px 12px; margin:2px 0 8px; }
   .line-due-detail-label { font-size:10.5px; color:var(--ink-dim); font-weight:700; margin-bottom:5px; }
@@ -297,15 +293,15 @@
   .line-due-detail-row .dim { color:var(--ink-dim); font-size:11px; }
   /* Customer identity colors — distinct per brand, reused wherever a customer name
      needs to stand out (By Customer headers, room-tag badges on running products). */
-  .line-cust-color-aldi { color:#2b8fd6; }
-  .line-cust-color-asda { color:#5fb87a; }
-  .line-cust-color-coop { color:#5fd0e6; }
-  .line-cust-color-ms { color:#e8a33d; }
+  .line-cust-color-aldi { color:#3b82c4; }
+  .line-cust-color-asda { color:#b8960a; }
+  .line-cust-color-coop { color:#d4711f; }
+  .line-cust-color-ms { color:#1a1a1a; background:#e8e9ea; padding:0 4px; border-radius:3px; }
   .line-cust-color-kfc { color:#e5433a; }
-  .line-cust-color-booth { color:#9b7fd6; }
-  .line-cust-color-iceland { color:#4ec9c9; }
-  .line-cust-color-tesco { color:#4287e0; }
-  .line-cust-color-ocado { color:#8ee06b; }
+  .line-cust-color-booth { color:#8a5a3c; }
+  .line-cust-color-iceland { color:#8c2f39; }
+  .line-cust-color-tesco { color:#d6c317; }
+  .line-cust-color-ocado { color:#6b3fa0; }
   .line-cust-color-other { color:var(--ink-dim); }
   .line-cust-color-intercompany { color:#e88ad0; }
 
@@ -365,7 +361,7 @@
     <button id="packModeToggle" class="hidden">Pack info</button>
   </div>
   <div class="toolbar hidden" id="lineToolbar">
-    <button id="lineSubtabRooms" class="on">Rooms &amp; Lines</button>
+    <button id="lineSubtabRooms" class="on">By Lines</button>
     <button id="lineSubtabCustomers">By Customer</button>
   </div>
   <div class="toolbar hidden" id="lineToolbar2">
@@ -1419,6 +1415,7 @@ function lineNormalizeRoomKey(raw){
   const lc=String(raw).toLowerCase().trim();
   if(lc==='fp1'||lc.includes('fresh pack 1')) return 'fp1';
   if(lc==='fp2'||lc.includes('fresh pack 2')) return 'fp2';
+  if(lc==='fp3'||lc.includes('fresh pack 3')) return 'fp3';
   if(lc==='cut'||lc.includes('cutting')) return 'cut';
   if(lc==='kfc'||lc.includes('kfc')) return 'kfc';
   if(lc==='deb'||lc.includes('debon')) return 'deb';
@@ -1501,21 +1498,32 @@ function lineParseForeignBodySheet(sheetRows){
     }
     const down=lineIsDowntime(checkType);
     const product=down?null:[productType,flavour,weight].filter(Boolean).join(' — ');
-    // KFC's foreign-body rows feed the FP3 sub-line and the "line is currently down"
-    // signal (Start-Up sheet has no down-state of its own) — kept in, tagged so the
-    // room builder can route them correctly.
-    if(roomKey==='kfc') ln = 'FP3';
+    // Department=KFC foreign-body rows only ever contribute a down/no-production
+    // signal to Line 1 — their product text ("Wholebird") is generic noise, not
+    // KFC's real product identity (that only comes from Start-Up). A non-down KFC
+    // foreign-body row carries no useful information here, so it's dropped; only
+    // down-checks survive to merge with the Start-Up product timeline for Line 1.
+    // Department=FP3 rows are a genuinely separate line (Hot Wings only), routed to
+    // their own 'fp3' room key by lineNormalizeRoomKey and merged into the KFC room
+    // grouping later, in lineBuildRoomLineTimelines.
+    if(roomKey==='kfc'){
+      if(!down) return null;
+      ln = '1';
+    }
     return { roomKey, line:ln, ts, checkType, product, customer, down };
-  }).filter(r=>r.line!=null && r.ts!=null);
+  }).filter(r=>r!=null && r.line!=null && r.ts!=null);
 }
 
 function lineBuildRoomLineTimelines(records){
   const byRoom={};
   records.forEach(r=>{
-    if(!byRoom[r.roomKey]) byRoom[r.roomKey]={};
-    const lk=String(r.line).trim();
-    if(!byRoom[r.roomKey][lk]) byRoom[r.roomKey][lk]=[];
-    byRoom[r.roomKey][lk].push(r);
+    // FP3 is its own department in the export, but displays as a second line
+    // inside the KFC room alongside Line 1 — so it's grouped under 'kfc' here.
+    const bucketRoomKey = r.roomKey==='fp3' ? 'kfc' : r.roomKey;
+    const lineLabel = r.roomKey==='fp3' ? 'FP3' : String(r.line).trim();
+    if(!byRoom[bucketRoomKey]) byRoom[bucketRoomKey]={};
+    if(!byRoom[bucketRoomKey][lineLabel]) byRoom[bucketRoomKey][lineLabel]=[];
+    byRoom[bucketRoomKey][lineLabel].push(r);
   });
   const now=new Date();
   return Object.keys(byRoom)
@@ -1594,15 +1602,9 @@ function lineBuildCurrentByCustomer(rooms, kfcEvents){
       byCustomer[customer].push({ roomKey, roomLabel, roomCls, line:ln.line, product:current.product, start:current.start, alert:ln.alert });
     });
   });
-  // KFC's current product comes from the Start-Up sheet (kfcEvents), not the
-  // foreign-body-derived rooms data — always customer "KFC", shown as Line 1.
-  if(kfcEvents && kfcEvents.length>0){
-    const latest=kfcEvents[kfcEvents.length-1];
-    if(latest.productType){
-      if(!byCustomer['KFC']) byCustomer['KFC']=[];
-      byCustomer['KFC'].push({ roomKey:'kfc', roomLabel:'KFC', roomCls:'', line:'1', product:latest.productType, start:latest.ts, alert:false });
-    }
-  }
+  // KFC Line 1's current product now flows through naturally from the merged rooms
+  // data above (Start-Up events were merged into Line 1's check timeline during
+  // parsing), so no separate injection is needed here.
   const customers = Object.keys(byCustomer)
     .sort((a,b)=>lineCustomerSortIndex(a)-lineCustomerSortIndex(b) || a.localeCompare(b))
     .map(customer=>{
@@ -1644,10 +1646,24 @@ const LINE_MATCH_STOPWORDS = new Set([
   'deli','counter','joint','joints','fillet','fillets','portion','portions',
   'pack','piece','pieces','whole','bird','wholebird','strip','strips'
 ]);
+
+// Known name-variant aliases — different ways the same product gets typed across the
+// portal export and the tracker's product list. Applied as whole-phrase replacements
+// before word-splitting so word order in the variant doesn't matter (e.g. "Small
+// Extra Tasty" and "Extra Tasty Small" both normalize to the same thing).
+const LINE_NAME_ALIASES = [
+  { pattern: /\bsmall\s+extra\s+tasty\b/g, replacement: 'extra tasty small' },
+  { pattern: /\bgarlic\s+herbs\b/g, replacement: 'garlic and herb' },
+];
+function lineApplyNameAliases(name){
+  let s = String(name||'').toLowerCase();
+  LINE_NAME_ALIASES.forEach(({pattern,replacement})=>{ s = s.replace(pattern, replacement); });
+  return s;
+}
+
 function lineWordsOf(name){
   if(!name) return [];
-  return String(name)
-    .toLowerCase()
+  return lineApplyNameAliases(name)
     .replace(/[()\-–—,\/]/g,' ')
     .split(/\s+/)
     .map(w=>w.replace(/^\d+(\.\d+)?(g|kg|ml|l)$/,''))
@@ -1866,9 +1882,9 @@ function lineSuggestionIcons(suggestions){
   const hasNutri = suggestions.some(s=>s.source==='Nutritional');
   const hasShelf = suggestions.some(s=>s.source==='Shelf-Life');
   let out='';
-  if(hasRoutine) out+='<span class="line-due-icon routine" title="Routine sample may be due">●</span>';
-  if(hasNutri) out+='<span class="line-due-icon nutri" title="Nutritional sample may be due">▲</span>';
-  if(hasShelf) out+='<span class="line-due-icon shelf" title="Shelf-life sample may be due">■</span>';
+  if(hasRoutine) out+='<span class="line-due-icon routine" title="Routine sample may be due">R</span>';
+  if(hasNutri) out+='<span class="line-due-icon nutri" title="Nutritional sample may be due">N</span>';
+  if(hasShelf) out+='<span class="line-due-icon shelf" title="Shelf-life sample may be due">S</span>';
   return out;
 }
 function lineCustomerColorClass(name){
@@ -1906,26 +1922,42 @@ function lineCollectRanProducts(wb){
 // Every active product across Routine/Nutritional/Shelf-Life, regardless of
 // done/remaining state — the weekly report checks "did this ever run", which is a
 // different question from "is it still due this period".
-function lineAllActiveProducts(){
+// Base list for the weekly "never ran" report is Routine products only, excluding
+// the "Other" bucket customer (swabs/allergen/etc aren't meaningfully "ran or not").
+function lineAllRoutineProducts(){
   const out=[];
   state.customers.forEach(c=>{
+    if(c.other) return; // exclude "Other"
     activeProducts(c.name).forEach(p=>{
       rowsForProduct(p,c).forEach(r=>{
-        out.push({ name:r.name, customer:c.name, roomKey:r.room, source:'Routine ('+r.freq+')' });
+        out.push({ name:r.name, customer:c.name, roomKey:r.room });
       });
-    });
-  });
-  ['nutri','shelf'].forEach(tab=>{
-    schedList(tab).forEach(entry=>{
-      const info=schedName(entry);
-      out.push({ name:info.name, customer:info.customer, roomKey:info.room, source: tab==='nutri'?'Nutritional':'Shelf-Life' });
     });
   });
   return out;
 }
 
+// Separate lookup used only to badge a never-ran Routine product with R/N/S when
+// it's ALSO still unticked in Nutritional/Shelf-Life — scoped to the current month
+// only, same as the "likely due" suggestions elsewhere.
+function lineNutriShelfRemainingFlags(customerName, roomKey, productName){
+  const nowMonth = new Date().getMonth();
+  const flags=[];
+  ['nutri','shelf'].forEach(tab=>{
+    schedList(tab).forEach(entry=>{
+      if(entry.month!==nowMonth) return;
+      if(schedDone(entry)) return;
+      const info=schedName(entry);
+      if(info.customer!==customerName) return;
+      const matches = lineMatchRemaining(roomKey, productName, [{name:info.name, source: tab==='nutri'?'Nutritional':'Shelf-Life', roomKey:info.room}]);
+      if(matches.length>0) flags.push(tab==='nutri'?'N':'S');
+    });
+  });
+  return flags;
+}
+
 function lineHandleWeeklyFiles(files){
-  let filesProcessed=0, ranAll=[];
+  let ranAll=[];
   const readers = files.map(file=>new Promise((resolve)=>{
     const reader=new FileReader();
     reader.onload=(e)=>{
@@ -1939,18 +1971,16 @@ function lineHandleWeeklyFiles(files){
   }));
   Promise.all(readers).then(results=>{
     results.forEach(r=>ranAll.push(...r));
-    const allProducts = lineAllActiveProducts();
-    const neverRan = allProducts.filter(p=>{
+    const routineProducts = lineAllRoutineProducts();
+    const neverRan = routineProducts.filter(p=>{
       const custRan = ranAll.filter(r=>lineNormalizeCustomerName(r.customer)===lineNormalizeCustomerName(p.customer) || r.customer===p.customer);
       const roomRan = custRan.filter(r=>r.roomKey===p.roomKey || (p.roomKey==='kfc'&&r.roomKey==='kfc'));
-      // reuse the same room-specific identity matcher — if nothing running across
-      // the uploaded days matches this product's identity, it never ran.
       for(const r of roomRan){
-        const matches = lineMatchRemaining(p.roomKey, r.product, [{name:p.name, source:p.source, roomKey:p.roomKey}]);
+        const matches = lineMatchRemaining(p.roomKey, r.product, [{name:p.name, source:'Routine', roomKey:p.roomKey}]);
         if(matches.length>0) return false;
       }
       return true;
-    });
+    }).map(p=>({ ...p, flags: lineNutriShelfRemainingFlags(p.customer, p.roomKey, p.name) }));
     lineWeeklyReport = { fileCount: files.length, neverRan };
     render();
   });
@@ -1969,16 +1999,17 @@ function lineRenderWeeklyReport(){
   });
   let html = `<div class="line-weekly-report">
     <div class="line-weekly-title">Weekly report — never ran</div>
-    <div class="line-weekly-sub">${neverRan.length} product${neverRan.length>1?'s':''} on your list didn't appear across the uploaded day(s).</div>`;
+    <div class="line-weekly-sub">${neverRan.length} Routine product${neverRan.length>1?'s':''} didn't appear across the uploaded day(s). R/N/S badges mean it's also still due this month elsewhere.</div>`;
   Object.keys(byCustomer).sort((a,b)=>lineCustomerSortIndex(a)-lineCustomerSortIndex(b)||a.localeCompare(b)).forEach(customer=>{
     const custCls=lineCustomerColorClass(customer);
     html += `<div class="line-weekly-cust">
       <div class="line-weekly-cust-name ${custCls}">${customer}</div>`;
     byCustomer[customer].forEach(p=>{
-      const icon = p.source.startsWith('Routine') ? '<span class="line-due-icon routine">●</span>'
-        : p.source==='Nutritional' ? '<span class="line-due-icon nutri">▲</span>'
-        : '<span class="line-due-icon shelf">■</span>';
-      html += `<div class="line-weekly-item">${icon} ${p.name} <span class="dim">— ${p.source}</span></div>`;
+      const flagBadges = (p.flags||[]).map(f=>{
+        const cls = f==='N'?'nutri':f==='S'?'shelf':'routine';
+        return `<span class="line-due-icon ${cls}">${f}</span>`;
+      }).join('');
+      html += `<div class="line-weekly-item">${p.name}${flagBadges?' '+flagBadges:''}</div>`;
     });
     html += `</div>`;
   });
@@ -2002,6 +2033,7 @@ function lineAttachRoomSuggestions(rooms){
 
 function lineHandleFile(file){
   lineData.error=null;
+  lineWeeklyReport=null; // uploading today's export should always return to the live view
   const reader=new FileReader();
   reader.onload=(e)=>{
     try{
@@ -2009,16 +2041,31 @@ function lineHandleFile(file){
       const fbSheetName=lineFindSheetName(wb,['foreign body','metal','detecto']);
       const kfcSheetName=lineFindSheetName(wb,['kfc']);
       let roomsData=null, kfcEvents=null;
+      let records=[];
       if(fbSheetName){
         const rows=lineReadSheetRows(wb,fbSheetName);
-        const records=lineParseForeignBodySheet(rows);
-        if(records.length>0){ roomsData=lineBuildRoomLineTimelines(records); lineAttachRoomSuggestions(roomsData); }
+        records=lineParseForeignBodySheet(rows);
       }
       if(kfcSheetName){
         const rows=lineReadSheetRows(wb,kfcSheetName);
         const events=lineParseKfcSheet(rows);
         if(events.length>0) kfcEvents=events;
       }
+      // KFC Line 1's real product identity comes from Start-Up, not the foreign-body
+      // sheet (whose KFC rows only ever carry generic "Wholebird" noise, already
+      // stripped down to down-checks only during parsing). Converted to the same
+      // check shape and merged in here so Start-Up's product changes and foreign
+      // body's down-checks interleave correctly by real timestamp on Line 1.
+      if(kfcEvents && kfcEvents.length>0){
+        kfcEvents.forEach(ev=>{
+          if(!ev.productType) return;
+          records.push({
+            roomKey:'kfc', line:'1', ts:ev.ts, checkType:ev.checkType,
+            product:ev.productType, customer:'KFC', down:false
+          });
+        });
+      }
+      if(records.length>0){ roomsData=lineBuildRoomLineTimelines(records); lineAttachRoomSuggestions(roomsData); }
       if(!roomsData && !kfcEvents){
         lineData={ rooms:null, customers:null, kfcEvents:null, fileName:null,
           error:"Couldn't find recognizable Foreign Body or KFC sheets in this file. Check the tab names." };
@@ -2095,12 +2142,15 @@ function renderLineTab(){
         </div>`;
       if(!rCollapsed){
         room.lines.forEach(ln=>{
+          // KFC Line 1 renders via its own kill-date/product card (below) instead
+          // of the generic line card — avoids showing Line 1 twice.
+          if(room.roomKey==='kfc' && ln.line==='1') return;
           html += lineRenderLineCard(room.roomKey, ln);
         });
-        // KFC's Line 1 is the Start-Up product/kill-date timeline — its own
-        // pre-existing card UI, unchanged, just nested here under the KFC room.
+        // KFC Line 1 — the Start-Up product/kill-date timeline, its own pre-existing
+        // card UI, unchanged. Only rendered if Start-Up data actually exists.
         if(room.roomKey==='kfc' && lineData.kfcEvents){
-          html += lineRenderKfcLine1Card();
+          html += lineRenderKfcLine1Card(room);
         }
       }
       html += `</div>`;
@@ -2109,11 +2159,10 @@ function renderLineTab(){
     html += `<div class="line-hint">What's running right now, grouped by customer. Lines currently down aren't shown here.</div>`;
     lineData.customers.forEach(({customer,items})=>{
       const cCollapsed = lineCollapsedCustomers[customer];
-      const custCls = lineCustomerColorClass(customer);
       html += `<div class="line-room">
         <div class="line-room-head" data-linecust="${customer}">
           <span class="caret ${cCollapsed?'':'open'}"></span>
-          <span class="line-room-name ${custCls}">${customer}</span>
+          <span class="line-room-name">${customer}</span>
           <span class="line-room-count">${items.length} line${items.length>1?'s':''} running</span>
         </div>`;
       if(!cCollapsed){
@@ -2175,7 +2224,7 @@ function lineRenderLineCard(roomKey, ln){
               ${!run.down && run.customer ? `<span class="line-cust-badge ${lineCustomerColorClass(run.customer)}">${run.customer}</span>` : ''}
               ${hasSuggestions ? `<span data-linesuggest="${sugKey}">${lineSuggestionIcons(run.suggestions)}</span>` : ''}
             </div>
-            <div class="line-run-sub">${lineFmtTime(run.start)} → ${run.isCurrent?'now':lineFmtTime(run.end)} · ${run.checks.length} check${run.checks.length>1?'s':''}</div>
+            <div class="line-run-sub">${lineFmtTime(run.start)} · ${run.checks.length} check${run.checks.length>1?'s':''}</div>
           </div>
         </div>
         ${hasSuggestions && sugExpanded ? lineRenderSuggestionDetail(run.suggestions) : ''}`;
@@ -2195,14 +2244,17 @@ function lineRenderLineCard(roomKey, ln){
 }
 
 // KFC Line 1 — the existing Start-Up product/kill-date timeline card, unchanged,
-// just relocated to sit inside the KFC room instead of its own subtab.
-function lineRenderKfcLine1Card(){
+// just relocated to sit inside the KFC room instead of its own subtab. Title turns
+// red if the merged room data shows Line 1 is currently down (foreign-body signal).
+function lineRenderKfcLine1Card(kfcRoom){
   const lCollapsed = lineCollapsedLines['kfc-1'];
   const latest = lineData.kfcEvents[lineData.kfcEvents.length-1];
+  const line1Data = kfcRoom ? kfcRoom.lines.find(l=>l.line==='1') : null;
+  const alert = line1Data ? line1Data.alert : false;
   let html = `<div class="line-linecard">
     <div class="line-linecard-head" data-lineline="kfc-1">
       <span class="caret ${lCollapsed?'':'open'}"></span>
-      <span class="line-linecard-name">Line 1</span>
+      <span class="line-linecard-name ${alert?'line-alert':''}">Line 1</span>
       ${lCollapsed && latest ? `<span class="line-collapsed-summary">${latest.productType||'—'}</span>` : ''}
     </div>`;
   if(!lCollapsed){
