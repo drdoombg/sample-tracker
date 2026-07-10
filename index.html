@@ -623,7 +623,15 @@ function mergeImport(data){
   }
   return result;
 }
-function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function save(){
+  localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  // Keep R/N/S suggestion icons in sync with the product list without requiring a
+  // re-upload — cheap, since it only re-runs matching against already-parsed data.
+  if(lineData.rooms){
+    lineAttachRoomSuggestions(lineData.rooms);
+    lineData.customers = lineBuildCurrentByCustomer(lineData.rooms, lineData.kfcEvents);
+  }
+}
 function getCust(name){ return state.customers.find(c=>c.name===name); }
 
 function rowsForProduct(p,c){
@@ -1693,10 +1701,20 @@ function lineWordsOf(name){
 }
 // Extracts a weight token like "300g" or "1.1" (KFC-style decimal sizes) from a name,
 // for the Cutting/Deboning exact-weight requirement.
+// Returns a normalized gram value for Cutting/Deboning weight comparison — handles
+// "2kg", "2000g", and bare "2000" (assumed grams if >=20) or bare "2" (assumed kg
+// if <20) all resolving to the same 2000 value, so a product list entry written as
+// "2kg" correctly matches an export row whose raw weight column is a bare "2000".
 function lineWeightOf(name){
-  if(!name) return null;
-  const m = String(name).match(/(\d+(\.\d+)?)\s*(g|kg)\b/i) || String(name).match(/\b(\d\.\d)\b/);
-  return m ? m[1].toLowerCase() : null;
+  return lineRawWeightToGrams(name);
+}
+// Compares two weight strings with a small rounding tolerance (matches how the FP2
+// deli products already handle loosely-rounded entries) rather than requiring the
+// normalized gram values to be bit-for-bit equal.
+function lineWeightsMatch(a, b){
+  const ga=lineRawWeightToGrams(a), gb=lineRawWeightToGrams(b);
+  if(ga==null || gb==null) return false;
+  return Math.abs(ga-gb) <= 15;
 }
 
 // KFC identity collapse: reduces a KFC product name to its real identity bucket.
@@ -1774,17 +1792,17 @@ function lineMatchRemaining(roomKey, runningProduct, remaining){
   if(!runningProduct) return [];
 
   if(roomKey==='cut' || roomKey==='deb'){
-    // Cutting & Deboning: name words AND weight must both line up.
+    // Cutting & Deboning: name words AND weight must both line up. Weight
+    // comparison is tolerant of kg-vs-grams and light rounding (lineWeightsMatch),
+    // since the export's raw weight column may be a bare number in grams while the
+    // product list says "2kg", or either side may be rounded slightly.
     const runningWords=new Set(lineWordsOf(runningProduct));
-    const runningWeight=lineWeightOf(runningProduct);
     if(runningWords.size===0) return [];
     return remaining.filter(r=>{
       if(r.roomKey && r.roomKey!==roomKey) return false;
       const rWords=lineWordsOf(r.name);
-      const rWeight=lineWeightOf(r.name);
       const nameMatches = rWords.some(w=>runningWords.has(w));
-      const weightMatches = runningWeight && rWeight && runningWeight===rWeight;
-      return nameMatches && weightMatches;
+      return nameMatches && lineWeightsMatch(runningProduct, r.name);
     });
   }
 
