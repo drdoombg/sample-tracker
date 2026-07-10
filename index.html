@@ -287,6 +287,12 @@
   .line-cust-item:first-child { border-top:none; }
   .line-cust-product { font-size:13.5px; font-weight:600; }
   .line-cust-since { font-size:10.5px; color:var(--ink-dim); margin-left:auto; }
+  .line-due-mark { font-size:13px; cursor:pointer; opacity:.9; flex-shrink:0; }
+  .line-due-detail { background:var(--panel-2); border:1px solid var(--weekly); border-radius:9px;
+    padding:9px 12px; margin:2px 0 8px; }
+  .line-due-detail-label { font-size:10.5px; color:var(--weekly); font-weight:700; margin-bottom:5px; }
+  .line-due-detail-row { font-size:12.5px; padding:3px 0; }
+  .line-due-detail-row .dim { color:var(--ink-dim); font-size:11px; }
 
   .line-kfc-timeline { position:relative; padding-left:20px; }
   .line-kfc-timeline::before { content:''; position:absolute; left:5px; top:6px; bottom:6px; width:2px; background:var(--line); }
@@ -519,6 +525,7 @@ let lineCollapsedRooms = {};
 let lineCollapsedLines = {};
 let lineCollapsedCustomers = {};
 let lineExpandedRun = null;
+let lineExpandedSuggestion = null;
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
@@ -1498,12 +1505,165 @@ function lineBuildCurrentByCustomer(rooms){
       byCustomer[customer].push({ roomKey, roomLabel, roomCls, line:ln.line, product:current.product, start:current.start, stale:ln.stale });
     });
   });
-  return Object.keys(byCustomer)
+  const customers = Object.keys(byCustomer)
     .sort((a,b)=>lineCustomerSortIndex(a)-lineCustomerSortIndex(b) || a.localeCompare(b))
     .map(customer=>{
       const items=byCustomer[customer].sort((a,b)=>lineRoomSortIndex(a.roomKey)-lineRoomSortIndex(b.roomKey) || a.line.localeCompare(b.line,undefined,{numeric:true}));
       return { customer, items };
     });
+
+  // Attach "likely due" suggestions: for each currently-running item, check this
+  // customer's remaining (not yet ticked) Routine/Nutritional/Shelf-Life samples using
+  // room-specific matching rules (see lineMatchRemaining) — never asserted as a
+  // confirmed match, always a hint for a person to verify.
+  customers.forEach(({customer,items})=>{
+    const remaining = lineRemainingSamplesForCustomer(customer);
+    items.forEach(item=>{
+      item.suggestions = lineMatchRemaining(item.roomKey, item.product, remaining);
+    });
+  });
+
+  return customers;
+}
+
+// ---- Room-specific correlation rules ----
+// Cutting & Deboning: name AND weight both have to line up — a size is a different
+// product on the floor, not a variant.
+// Fresh Pack 1: name is a good indicator on its own, except "Joints" is ambiguous
+// (there's a Rotisserie Joints and a Butter Basted Joints) so "joints" alone can't
+// carry a match — it needs its flavour word too.
+// Fresh Pack 2: "Deli counter butter basted"/"Butter Basted 1.1/1.8" are the same
+// product family, likewise "Deli counter BBQ"/"BBQ 1.1/1.8" — weight doesn't matter
+// here, only the flavour identity.
+// KFC: "9 Piece", "Gas Flushed", "Frozen", "Standard" all collapse to one identity
+// ("9 piece") for Routine correlation — any version will do — but Nutritional and
+// Shelf-Life entries need the exact version to match, since that's what's actually
+// being tested. "Dark Meat" and "Dark Meat Gas Flushed" always collapse to "dark
+// meat". "Food Service" is never sampled and is excluded from suggestions entirely.
+
+const LINE_MATCH_STOPWORDS = new Set([
+  'the','and','with','for','of','a','an','g','kg','ml','l','x','na',
+  'deli','counter','joint','joints','fillet','fillets','portion','portions',
+  'pack','piece','pieces','whole','bird','wholebird','strip','strips'
+]);
+function lineWordsOf(name){
+  if(!name) return [];
+  return String(name)
+    .toLowerCase()
+    .replace(/[()\-–—,\/]/g,' ')
+    .split(/\s+/)
+    .map(w=>w.replace(/^\d+(\.\d+)?(g|kg|ml|l)$/,''))
+    .filter(w=>w.length>1 && !LINE_MATCH_STOPWORDS.has(w));
+}
+// Extracts a weight token like "300g" or "1.1" (KFC-style decimal sizes) from a name,
+// for the Cutting/Deboning exact-weight requirement.
+function lineWeightOf(name){
+  if(!name) return null;
+  const m = String(name).match(/(\d+(\.\d+)?)\s*(g|kg)\b/i) || String(name).match(/\b(\d\.\d)\b/);
+  return m ? m[1].toLowerCase() : null;
+}
+
+// KFC identity collapse: reduces a KFC product name to its real identity bucket.
+// version=null means "any version matches" (used for Routine correlation); version
+// is set when the exact version matters (used for Nutritional/Shelf-Life correlation).
+function lineKfcIdentity(name){
+  const lc=String(name||'').toLowerCase();
+  if(lc.includes('food service')) return null; // never sampled, excluded entirely
+  let base=null;
+  if(lc.includes('dark meat')) base='dark meat';
+  else if(lc.includes('9 piece')||lc.includes('9piece')) base='9 piece';
+  else if(lc.includes('hot wings')) base='hot wings';
+  else return { base:lc.trim(), version:lc.trim() }; // unrecognized — fall back to literal
+  let version=null;
+  if(lc.includes('gas flushed')) version='gas flushed';
+  else if(lc.includes('frozen')) version='frozen';
+  else if(lc.includes('standard')) version='standard';
+  return { base, version };
+}
+
+// Fresh Pack 2 identity collapse: "Deli counter butter basted"/"Butter Basted 1.1"
+// are the same family; likewise BBQ. Weight (1.1/1.8) doesn't matter for correlation.
+function lineFp2Identity(name){
+  const lc=String(name||'').toLowerCase();
+  if(lc.includes('butter basted')) return 'butter basted';
+  if(lc.includes('bbq')) return 'bbq';
+  return null; // no special collapse — falls through to generic word matching
+}
+
+function lineMatchRemaining(roomKey, runningProduct, remaining){
+  if(!runningProduct) return [];
+
+  if(roomKey==='cut' || roomKey==='deb'){
+    // Cutting & Deboning: name words AND weight must both line up.
+    const runningWords=new Set(lineWordsOf(runningProduct));
+    const runningWeight=lineWeightOf(runningProduct);
+    if(runningWords.size===0) return [];
+    return remaining.filter(r=>{
+      if(r.roomKey && r.roomKey!==roomKey) return false;
+      const rWords=lineWordsOf(r.name);
+      const rWeight=lineWeightOf(r.name);
+      const nameMatches = rWords.some(w=>runningWords.has(w));
+      const weightMatches = runningWeight && rWeight && runningWeight===rWeight;
+      return nameMatches && weightMatches;
+    });
+  }
+
+  if(roomKey==='kfc'){
+    const runningId=lineKfcIdentity(runningProduct);
+    if(!runningId) return []; // Food Service — never sampled
+    return remaining.filter(r=>{
+      const rId=lineKfcIdentity(r.name);
+      if(!rId) return false;
+      if(rId.base!==runningId.base) return false;
+      const needsExactVersion = r.source==='Nutritional' || r.source==='Shelf-Life';
+      if(needsExactVersion) return !!rId.version && rId.version===runningId.version;
+      return true; // Routine: any version of the same base product will do
+    });
+  }
+
+  if(roomKey==='fp2'){
+    const runningFp2=lineFp2Identity(runningProduct);
+    if(runningFp2){
+      return remaining.filter(r=>lineFp2Identity(r.name)===runningFp2);
+    }
+    // falls through to generic word matching below for FP2 products without a
+    // special collapse (e.g. PSO, Rotisserie, Spatchcock variants)
+  }
+
+  // Fresh Pack 1 (and FP2 fallback): generic word overlap, with "joints" excluded
+  // from the stopword set removed on purpose — "joints" needs its flavour word
+  // alongside it, which the stopword list already enforces since "joint"/"joints"
+  // sit in LINE_MATCH_STOPWORDS and can't trigger a match alone.
+  const runningWords=new Set(lineWordsOf(runningProduct));
+  if(runningWords.size===0) return [];
+  return remaining.filter(r=>{
+    const rWords=lineWordsOf(r.name);
+    return rWords.some(w=>runningWords.has(w));
+  });
+}
+
+// Gathers every not-yet-done sample name for a customer across Routine, Nutritional,
+// and Shelf-Life, reusing the app's own isDone/schedDone logic so "remaining" means
+// exactly what the Routine tab's "Remaining only" filter means. Carries room + source
+// so room-specific correlation rules (and the KFC exact-version rule) can apply.
+function lineRemainingSamplesForCustomer(customerName){
+  const out=[];
+  const cust = getCust(customerName);
+  if(cust){
+    activeProducts(customerName).forEach(p=>{
+      rowsForProduct(p,cust).forEach(r=>{
+        if(!isDone(r.pid,r.freq)) out.push({ name:r.name, source:'Routine ('+r.freq+')', roomKey:r.room });
+      });
+    });
+  }
+  ['nutri','shelf'].forEach(tab=>{
+    schedList(tab).forEach(entry=>{
+      if(schedDone(entry)) return;
+      const info=schedName(entry);
+      if(info.customer===customerName) out.push({ name:info.name, source: tab==='nutri'?'Nutritional':'Shelf-Life', roomKey:info.room });
+    });
+  });
+  return out;
 }
 
 function lineParseKfcSheet(sheetRows){
@@ -1695,11 +1855,21 @@ function renderLineTab(){
       if(!cCollapsed){
         html += `<div class="line-cust-items">`;
         items.forEach((item,i)=>{
+          const hasSuggestions = item.suggestions && item.suggestions.length>0;
+          const sugKey = customer+'-'+i;
+          const sugExpanded = lineExpandedSuggestion===sugKey;
           html += `<div class="line-cust-item">
             <span class="line-room-tag ${item.roomCls}">${item.roomLabel} · Line ${item.line}</span>
             <span class="line-cust-product">${item.product}</span>
+            ${hasSuggestions ? `<span class="line-due-mark" data-linesuggest="${sugKey}" title="Might be a sample you still need">📋</span>` : ''}
             <span class="line-cust-since mono">since ${lineFmtTime(item.start)}${item.stale?' · stale':''}</span>
           </div>`;
+          if(hasSuggestions && sugExpanded){
+            html += `<div class="line-due-detail">
+              <div class="line-due-detail-label">Possibly due — check before you rule it out:</div>
+              ${item.suggestions.map(s=>`<div class="line-due-detail-row">${s.name} <span class="dim">— ${s.source}</span></div>`).join('')}
+            </div>`;
+          }
         });
         html += `</div>`;
       }
@@ -1755,6 +1925,11 @@ function wireLineInteractions(){
     e.stopPropagation();
     const k=el.getAttribute('data-linerun');
     lineExpandedRun = lineExpandedRun===k ? null : k; render();
+  }));
+  main.querySelectorAll('[data-linesuggest]').forEach(el=>el.addEventListener('click',(e)=>{
+    e.stopPropagation();
+    const k=el.getAttribute('data-linesuggest');
+    lineExpandedSuggestion = lineExpandedSuggestion===k ? null : k; render();
   }));
 }
 
