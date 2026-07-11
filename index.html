@@ -54,6 +54,24 @@
       return onSnapshot(doc(db,'circles',circleId), (snap)=>{
         if(snap.exists()) callback(snap.data());
       });
+    },
+    // Line Timeline's live daily snapshot — separate from the circle's permanent
+    // state, stored as a subdocument so it's scoped to the same circle without a
+    // second ID scheme. Deleting it (writing null) is how the Clear button works.
+    async writeLineSnapshot(circleId, lineSnapshot){
+      await setDoc(doc(db,'circles',circleId,'line','current'), { data: lineSnapshot, updatedAt: serverTimestamp() });
+    },
+    async clearLineSnapshot(circleId){
+      await setDoc(doc(db,'circles',circleId,'line','current'), { data: null, updatedAt: serverTimestamp() });
+    },
+    async getLineSnapshot(circleId){
+      const snap = await getDoc(doc(db,'circles',circleId,'line','current'));
+      return snap.exists() ? snap.data().data : null;
+    },
+    listenLineSnapshot(circleId, callback){
+      return onSnapshot(doc(db,'circles',circleId,'line','current'), (snap)=>{
+        callback(snap.exists() ? snap.data().data : null);
+      });
     }
   };
   window.dispatchEvent(new Event('firebase-ready'));
@@ -291,6 +309,7 @@
   .line-upload-title { font-size:14px; font-weight:600; margin-bottom:3px; }
   .line-upload-sub { font-size:11.5px; color:var(--ink-dim); margin-bottom:12px; }
   .line-upload-btn { display:inline-block; padding:10px 20px; font-size:13.5px; }
+  .line-clear-btn { display:inline-block; padding:7px 14px; font-size:11.5px; margin-left:8px; }
   .line-filename { font-size:11.5px; color:var(--ink-dim); margin-top:10px; font-family:monospace; }
   .line-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(76px,1fr)); gap:8px; margin-bottom:16px; }
   .line-stat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
@@ -790,6 +809,13 @@ async function syncInit(){
     try{ await window.__fb.createCircle(syncCircleId, state); }catch(e){}
   }
   syncStartListening(syncCircleId);
+  // Line Timeline: load whatever's currently there on startup (persists across
+  // refresh, per design), then keep listening for live updates from other devices.
+  try{
+    const existing = await window.__fb.getLineSnapshot(syncCircleId);
+    if(existing) lineSyncApplyRemote(existing);
+  }catch(e){}
+  lineSyncStartListening(syncCircleId);
   syncRenderMenu();
 }
 
@@ -846,6 +872,11 @@ async function syncPairWithCode(rawCode){
     localStorage.setItem(CIRCLE_KEY, syncCircleId);
     if(remote && remote.state) syncApplyRemoteState(remote.state);
     syncStartListening(syncCircleId);
+    try{
+      const existingLine = await window.__fb.getLineSnapshot(syncCircleId);
+      if(existingLine) lineSyncApplyRemote(existingLine);
+    }catch(e){}
+    lineSyncStartListening(syncCircleId);
     hint.textContent = 'Synced! This device now shares data with your other device(s).';
     syncShownCode = null;
     syncRenderMenu();
@@ -856,6 +887,81 @@ async function syncPairWithCode(rawCode){
 
 window.addEventListener('firebase-ready', syncInit);
 if(window.__fb) syncInit(); // in case the module already finished loading
+
+// ============================================================
+// LINE TIMELINE SYNC — separate from Sample Tracker's permanent state sync above.
+// Line Timeline data is a live daily snapshot: it syncs across paired devices
+// automatically, persists across refreshes (so re-opening the app shows whatever
+// was last uploaded, on any device), and is cleared only by an explicit Clear
+// button tap (which also clears it everywhere) or a fresh upload replacing it.
+// Stored as circles/{circleId}/line/current, a subdocument of the Sample Tracker
+// circle so it rides along with the same pairing — no separate ID scheme needed.
+// ============================================================
+let lineSyncApplyingRemote = false;
+let lineSyncUnsubscribe = null;
+
+// Dates don't survive a JSON round-trip as Date objects — stringify turns them into
+// ISO strings automatically, but parsing back needs a reviver to turn ISO-looking
+// strings back into real Date objects, since the rest of the Line Timeline code
+// calls Date methods (toLocaleTimeString etc.) on run.start/run.end/check.ts.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+function lineSyncReviveDates(key, value){
+  if(typeof value==='string' && ISO_DATE_RE.test(value)) return new Date(value);
+  return value;
+}
+function lineSyncSerialize(){
+  return JSON.stringify({
+    rooms: lineData.rooms, customers: lineData.customers,
+    kfcEvents: lineData.kfcEvents, fileName: lineData.fileName
+  });
+}
+function lineSyncDeserialize(json){
+  return JSON.parse(json, lineSyncReviveDates);
+}
+
+function lineSyncUpload(){
+  if(!syncCircleId || !window.__fb) return;
+  window.__fb.writeLineSnapshot(syncCircleId, lineSyncSerialize()).catch(()=>{
+    // offline/transient — the local view is already showing the fresh upload;
+    // nothing further to do here, this isn't a blocking error for the person
+  });
+}
+
+function lineSyncApplyRemote(serialized){
+  lineSyncApplyingRemote = true;
+  try{
+    if(!serialized){
+      // remote was cleared — reset to the empty upload screen
+      lineData = { rooms:null, customers:null, kfcEvents:null, fileName:null, error:null };
+    } else {
+      const parsed = lineSyncDeserialize(serialized);
+      lineData = { rooms:parsed.rooms, customers:parsed.customers, kfcEvents:parsed.kfcEvents, fileName:parsed.fileName, error:null };
+      if(lineData.rooms) lineCollapseAllRoomsAndLines(lineData.rooms, lineData.kfcEvents);
+    }
+    lineSubtab='rooms';
+    lineViewMode='daily';
+    if(currentTab==='line') render();
+  } finally {
+    lineSyncApplyingRemote = false;
+  }
+}
+
+function lineSyncStartListening(circleId){
+  if(lineSyncUnsubscribe) lineSyncUnsubscribe();
+  lineSyncUnsubscribe = window.__fb.listenLineSnapshot(circleId, (serialized)=>{
+    lineSyncApplyRemote(serialized);
+  });
+}
+
+function lineSyncClear(){
+  lineData = { rooms:null, customers:null, kfcEvents:null, fileName:null, error:null };
+  lineViewMode='daily';
+  render();
+  if(syncCircleId && window.__fb){
+    window.__fb.clearLineSnapshot(syncCircleId).catch(()=>{});
+  }
+}
+
 function getCust(name){ return state.customers.find(c=>c.name===name); }
 
 function rowsForProduct(p,c){
@@ -2385,6 +2491,7 @@ function lineHandleFile(file){
       };
       lineSubtab = 'rooms';
       render();
+      lineSyncUpload(); // push this upload to other paired devices
     }catch(err){
       lineData={ rooms:null, customers:null, kfcEvents:null, fileName:null,
         error:"Couldn't read that file. Make sure it's the .xlsx export from the portal." };
@@ -2414,6 +2521,7 @@ function renderLineTab(){
       <div class="line-upload-title">${hasData?"Today's export":"Load the day's .xlsx export"}</div>
       <div class="line-upload-sub">${hasData?'Tap to view · tap button to refresh':'Full-day export · replaces current view'}</div>
       <button class="btn primary line-upload-btn" id="lineUploadBtn2">Upload file</button>
+      ${hasData?`<button class="btn ghost line-clear-btn" id="lineClearBtn">Clear</button>`:''}
       ${lineData.fileName?`<div class="line-filename">${lineData.fileName}</div>`:''}
     </div>
     <div class="line-upload-zone line-upload-zone-alt ${lineViewMode==='weekly'?'line-upload-active':''}" id="lineWeeklyZone">
@@ -2619,8 +2727,10 @@ function lineRenderSuggestionDetail(suggestions){
 function wireLineUpload(){
   const zone=document.getElementById('lineUploadZone');
   const btn=document.getElementById('lineUploadBtn2');
+  const clearBtn=document.getElementById('lineClearBtn');
   const hasDaily = lineData.rooms || lineData.kfcEvents;
   if(btn) btn.addEventListener('click',(e)=>{ e.stopPropagation(); document.getElementById('lineImportFile').click(); });
+  if(clearBtn) clearBtn.addEventListener('click',(e)=>{ e.stopPropagation(); lineSyncClear(); });
   if(zone) zone.addEventListener('click',()=>{
     if(hasDaily){ lineViewMode='daily'; render(); }
     else document.getElementById('lineImportFile').click();
