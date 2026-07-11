@@ -156,6 +156,23 @@
   .chip.done.monthly { border-left-color:var(--monthly); }
   /* schedule chips (no freq class) get the green ribbon when done */
   .chip.done:not(.weekly):not(.monthly) { border-left-color:var(--done); }
+  /* Nutritional/Shelf-Life three-state cycle: sent (amber, strikethrough) then
+     received (green, same look as Routine's done state) */
+  .chip.sent { background:rgba(232,163,61,.1); border-left-color:var(--weekly); opacity:.88; }
+  .chip.sent .check { border-color:var(--weekly); background:var(--weekly); }
+  .chip.sent .chip-name { text-decoration:line-through; text-decoration-color:var(--weekly); opacity:.75; }
+  .chip.received { background:var(--done-bg); border-left-color:var(--done); opacity:.82; }
+  .chip.received .check { border-color:var(--done); background:var(--done); }
+  .chip.received .chip-name { text-decoration:line-through; text-decoration-color:var(--done); opacity:.75; }
+  .chip.sent .check svg, .chip.received .check svg { display:block; }
+  .sched-date.sent { color:var(--weekly); }
+  .sched-date.received { color:var(--done); }
+  .results-summary { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px; }
+  .results-stat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .results-stat-val { font-size:20px; font-weight:700; font-family:monospace; }
+  .results-stat-val.received { color:var(--done); }
+  .results-stat-val.pending { color:var(--weekly); }
+  .results-stat-label { font-size:10.5px; color:var(--ink-dim); margin-top:2px; }
   .check { width:18px; height:18px; border-radius:50%; border:2px solid var(--line);
     flex-shrink:0; display:grid; place-items:center; }
   .chip.done .check { border-color:var(--done); background:var(--done); }
@@ -697,7 +714,7 @@ function defaultState(){
       {name:'Ocado',freqs:['monthly']},
       {name:'Other',freqs:['weekly','monthly'],other:true}
     ],
-    products:[], ticks:{},
+    products:[], ticks:{}, tickDates:{},
     // schedule entries: { id, pid?, name, customer, month:0-11, doneYear?, doneDate? }
     nutri:[], shelf:[]
   };
@@ -712,6 +729,15 @@ function load(){
       const s=JSON.parse(raw);
       if(!s.nutri) s.nutri=[];
       if(!s.shelf) s.shelf=[];
+      if(!s.tickDates) s.tickDates={};
+      // One-time backfill: any Routine tick that predates this feature has no
+      // recorded date. Rather than fabricate a false history, show today's date
+      // as an honest placeholder — this only fills gaps, never overwrites a real
+      // recorded date, and only runs for keys missing from tickDates.
+      const todayStr = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+      Object.keys(s.ticks||{}).forEach(k=>{
+        if(s.ticks[k] && !s.tickDates[k]) s.tickDates[k]=todayStr;
+      });
       return s;
     }
   }catch(e){}
@@ -728,6 +754,7 @@ function mergeImport(data){
     customers: fresh.customers.map(c=>({...c})),  // app-owned structure, current & correct
     products: Array.isArray(data.products) ? data.products : [],
     ticks: (data.ticks && typeof data.ticks==='object') ? data.ticks : {},
+    tickDates: (data.tickDates && typeof data.tickDates==='object') ? data.tickDates : {},
     nutri: Array.isArray(data.nutri) ? data.nutri : [],
     shelf: Array.isArray(data.shelf) ? data.shelf : []
   };
@@ -1038,7 +1065,14 @@ function isDone(pid,freq){
 }
 function toggleDone(pid,freq){
   const k=tickKey(pid,freq); const now=freq==='weekly'?weekKey():monthKey();
-  state.ticks[k]=(state.ticks[k]===now)?null:now; save();
+  if(state.ticks[k]===now){
+    state.ticks[k]=null;
+    delete state.tickDates[k];
+  } else {
+    state.ticks[k]=now;
+    state.tickDates[k]=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  }
+  save();
 }
 // products for a customer that are active in the routine cycle (not delisted)
 function activeProducts(custName){ return state.products.filter(p=>p.customer===custName && !p.delisted); }
@@ -1167,9 +1201,12 @@ function chipHTML(r,c,f){
   const done=isDone(r.pid,r.freq);
   const info=r.room?roomInfo(r.room):null;
   const nameCls=info?info.cls:'';
+  const tickDate = state.tickDates ? state.tickDates[tickKey(r.pid,r.freq)] : null;
+  const dateBit = done && tickDate ? `<span class="sched-date">✓ ${esc(tickDate)}</span>` : '';
   return `<div class="chip ${r.freq} ${done?'done':''}" data-pid="${r.pid}" data-freq="${r.freq}">
     <div class="check">${CHECK_SVG}</div>
     <span class="chip-name ${nameCls}">${esc(r.name)}</span>
+    ${dateBit}
     <span class="room-edit-wrap">${editing?roomEditorHTML(r.pid,r.room,c.name):''}</span>
     <button class="delist-btn" data-delistpid="${r.pid}">Delist</button>
     <div class="sort-arrows">
@@ -1184,11 +1221,21 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 /* ---------- schedule (nutritional / shelf-life) ---------- */
 function schedList(tab){ return tab==='nutri'?state.nutri:state.shelf; }
 function schedDone(entry){ return entry.doneYear === new Date().getFullYear(); }
+function schedReceived(entry){ return schedDone(entry) && !!entry.received; }
 function toggleSchedDone(tab, id){
   const e=schedList(tab).find(x=>x.id===id); if(!e) return;
   const yr=new Date().getFullYear();
-  if(e.doneYear===yr){ e.doneYear=null; e.doneDate=null; }
-  else { e.doneYear=yr; e.doneDate=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
+  const dateStr = ()=>new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  if(!schedDone(e)){
+    // untouched -> sample sent (amber, leaves Remaining)
+    e.doneYear=yr; e.doneDate=dateStr(); e.received=false; e.receivedDate=null;
+  } else if(!e.received){
+    // sent -> results received (green)
+    e.received=true; e.receivedDate=dateStr();
+  } else {
+    // received -> back to untouched
+    e.doneYear=null; e.doneDate=null; e.received=false; e.receivedDate=null;
+  }
   save(); render();
 }
 // resolve an entry's current display name + whether its product still exists
@@ -1209,13 +1256,21 @@ function renderTestTab(tab){
       Tap <b>+ Schedule test</b> to add products to this month.</div>`;
     return;
   }
+  // Results summary — independent of the Remaining-only filter, since a sample can
+  // be sent (off Remaining) but still awaiting results back from the lab.
+  const receivedCount = list.filter(e=>schedReceived(e)).length;
+  const pendingResultsCount = list.filter(e=>schedDone(e) && !schedReceived(e)).length;
+  const summaryHTML = `<div class="results-summary">
+    <div class="results-stat"><div class="results-stat-val received">${receivedCount}</div><div class="results-stat-label">Results received</div></div>
+    <div class="results-stat"><div class="results-stat-val pending">${pendingResultsCount}</div><div class="results-stat-label">Results pending</div></div>
+  </div>`;
   // group by customer for consistency with routine
   const byCust={};
   for(const e of list){
     const info=schedName(e);
     (byCust[info.customer||'Other'] ||= []).push({e,info});
   }
-  let visible=0, html='';
+  let visible=0, html=summaryHTML;
   const order=state.customers.map(c=>c.name);
   const custNames=Object.keys(byCust).sort((a,b)=>order.indexOf(a)-order.indexOf(b));
   for(const cust of custNames){
@@ -1234,8 +1289,8 @@ function renderTestTab(tab){
     </div>`;
     visible+=items.length;
   }
-  if(visible===0){
-    main.innerHTML=`<div class="empty">All ${label} tests for ${MONTHS[viewMonth]} are done. 🎉</div>`;
+  if(visible===0 && testRemainingOnly){
+    main.innerHTML=summaryHTML+`<div class="empty">All ${label} tests for ${MONTHS[viewMonth]} are sent. 🎉<br><br>Turn off <b>Remaining</b> to mark results received.</div>`;
     return;
   }
   main.innerHTML=html;
@@ -1243,8 +1298,11 @@ function renderTestTab(tab){
 
 function schedChipHTML(tab, entry, info){
   const done=schedDone(entry);
+  const received=schedReceived(entry);
   const roomCls = info.room?(roomInfo(info.room)?.cls||''):'';
-  const dateBit = done && entry.doneDate ? `<span class="sched-date">✓ ${esc(entry.doneDate)}</span>` : '';
+  const dateBit = received && entry.receivedDate
+    ? `<span class="sched-date received">✓ ${esc(entry.receivedDate)}</span>`
+    : (done && entry.doneDate ? `<span class="sched-date sent">Sent ${esc(entry.doneDate)}</span>` : '');
   // pack info line (shelf-life only)
   let packBit='';
   if(tab==='shelf'){
@@ -1257,7 +1315,8 @@ function schedChipHTML(tab, entry, info){
   const selBox = (tab==='shelf' && packMode)
     ? `<div class="pack-check ${packSel.has(entry.id)?'on':''}" data-packsel="${entry.id}">${packSel.has(entry.id)?'✓':''}</div>`
     : '';
-  return `<div class="chip ${done?'done':''}" data-schedtab="${tab}" data-schedid="${entry.id}">
+  const stateCls = received ? 'received' : (done ? 'sent' : '');
+  return `<div class="chip ${stateCls}" data-schedtab="${tab}" data-schedid="${entry.id}">
     ${packMode&&tab==='shelf' ? selBox : `<div class="check">${CHECK_SVG}</div>`}
     <div class="sched-body">
       <span class="chip-name ${roomCls} ${info.delisted?'delisted':''}">${esc(info.name)}${info.delisted?' (delisted)':''}</span>
@@ -1330,6 +1389,7 @@ main.addEventListener('click',e=>{
       const pid=del.getAttribute('data-delpid');
       state.products=state.products.filter(x=>x.id!==pid);
       Object.keys(state.ticks).forEach(k=>{ if(k.startsWith(pid+'|')) delete state.ticks[k]; });
+      Object.keys(state.tickDates).forEach(k=>{ if(k.startsWith(pid+'|')) delete state.tickDates[k]; });
       save(); render();
     } else {
       document.querySelectorAll('.del-btn.confirm').forEach(b=>{ b.classList.remove('confirm'); b.textContent='✕'; });
@@ -2382,10 +2442,17 @@ function lineCollectRanProducts(wb){
 // the "Other" bucket customer (swabs/allergen/etc aren't meaningfully "ran or not").
 function lineAllRoutineProducts(){
   const out=[];
+  const seen=new Set();
   state.customers.forEach(c=>{
     if(c.other) return; // exclude "Other"
     activeProducts(c.name).forEach(p=>{
       rowsForProduct(p,c).forEach(r=>{
+        // A product can be scheduled under multiple frequencies (e.g. Co-op is
+        // both weekly and monthly) — that's still one physical product for the
+        // "did it ever run" question, so dedupe on name+customer+room.
+        const key = r.name+'__'+c.name+'__'+r.room;
+        if(seen.has(key)) return;
+        seen.add(key);
         out.push({ name:r.name, customer:c.name, roomKey:r.room });
       });
     });
@@ -2868,6 +2935,16 @@ render();
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+  // When a new sw.js takes over (after a GitHub deploy + skipWaiting), reload
+  // automatically so the new version shows up without needing to manually clear
+  // cache or reinstall — the sync circle survives this since it lives in
+  // localStorage, untouched by a normal page reload.
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swRefreshing) return;
+    swRefreshing = true;
+    window.location.reload();
   });
 }
 </script>
