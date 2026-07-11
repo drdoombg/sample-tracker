@@ -10,6 +10,55 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
+<script type="module">
+  // Sync layer: Firebase/Firestore holds one JSON document per "circle" (a paired
+  // set of devices). No login — a circle is just a random ID, reached either
+  // directly (this device already has one) or via a short pairing code that
+  // resolves to it. Everything here is bridged onto window.__fb so the rest of
+  // the app (plain script, not a module) can call it.
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+  import {
+    getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyA3m_s3y6Zz650t6vOmIRyIJyUFUOnEICs",
+    authDomain: "sample-tracker-2sfg.firebaseapp.com",
+    projectId: "sample-tracker-2sfg",
+    storageBucket: "sample-tracker-2sfg.firebasestorage.app",
+    messagingSenderId: "722491153953",
+    appId: "1:722491153953:web:d5be7b9c4a567a25060d60"
+  };
+  const fbApp = initializeApp(firebaseConfig);
+  const db = getFirestore(fbApp);
+
+  window.__fb = {
+    async getCircle(circleId){
+      const snap = await getDoc(doc(db,'circles',circleId));
+      return snap.exists() ? snap.data() : null;
+    },
+    async createCircle(circleId, stateData){
+      await setDoc(doc(db,'circles',circleId), { state: stateData, updatedAt: serverTimestamp() });
+    },
+    async writeCircle(circleId, stateData){
+      await setDoc(doc(db,'circles',circleId), { state: stateData, updatedAt: serverTimestamp() }, { merge:true });
+    },
+    async getCodeMapping(code){
+      const snap = await getDoc(doc(db,'codes',code));
+      return snap.exists() ? snap.data().circleId : null;
+    },
+    async setCodeMapping(code, circleId){
+      await setDoc(doc(db,'codes',code), { circleId });
+    },
+    listenCircle(circleId, callback){
+      return onSnapshot(doc(db,'circles',circleId), (snap)=>{
+        if(snap.exists()) callback(snap.data());
+      });
+    }
+  };
+  window.dispatchEvent(new Event('firebase-ready'));
+</script>
+
 <style>
   :root {
     --bg:#0f1b2d; --panel:#17263d; --panel-2:#1e3150; --ink:#eef3f8; --ink-dim:#90a4bd;
@@ -140,6 +189,23 @@
   .warn { background:rgba(229,96,77,.1); border:1px solid rgba(229,96,77,.35); color:#f0a599;
     font-size:12.5px; line-height:1.5; padding:12px 14px; border-radius:10px; margin-top:16px; }
   .divider { height:1px; background:var(--line); margin:18px 0; }
+  .sync-section { }
+  .sync-title { font-size:13px; font-weight:700; letter-spacing:.3px; text-transform:uppercase;
+    color:var(--ink-dim); margin-bottom:8px; }
+  .sync-status { font-size:12.5px; color:var(--ink-dim); margin-bottom:10px; }
+  .sync-status.ok { color:var(--done); }
+  .sync-status.err { color:var(--danger); }
+  .sync-code-box { background:var(--bg); border:1px solid var(--line); border-radius:12px;
+    padding:14px; text-align:center; margin-bottom:10px; }
+  .sync-code-label { font-size:11px; color:var(--ink-dim); margin-bottom:6px; }
+  .sync-code { font-family:monospace; font-size:22px; font-weight:700; letter-spacing:2px;
+    color:var(--ink); margin-bottom:8px; }
+  .sync-hint { font-size:11.5px; color:var(--ink-dim); line-height:1.4; }
+  .sync-pair-row { display:flex; gap:8px; margin-bottom:8px; }
+  .sync-pair-row input { flex:1; background:var(--bg); border:1px solid var(--line); color:var(--ink);
+    border-radius:9px; padding:11px 12px; font-size:15px; font-family:monospace; letter-spacing:1px;
+    text-transform:uppercase; }
+  .sync-pair-row .btn { padding:11px 16px; font-size:14px; white-space:nowrap; }
   .cust-row { display:flex; align-items:center; gap:10px; padding:11px 0; border-bottom:1px solid var(--line); }
   .cust-row:last-child { border-bottom:none; }
   .cr-name { flex:1; font-size:15px; font-weight:550; }
@@ -507,6 +573,23 @@
     </div>
     <input type="file" id="importFile" accept="application/json" class="hidden">
     <div class="warn">⚠ Before installing a new version, tap <b>Backup to file</b>. After reinstalling, tap <b>Import backup</b> to restore everything.</div>
+
+    <div class="divider"></div>
+    <div class="sync-section">
+      <div class="sync-title">Sync devices</div>
+      <div class="sync-status" id="syncStatus">Checking sync status…</div>
+      <div class="sync-code-box hidden" id="syncCodeBox">
+        <div class="sync-code-label">Your pairing code</div>
+        <div class="sync-code" id="syncCodeDisplay">— — — —</div>
+        <div class="sync-hint">Enter this on your other device to sync them together.</div>
+      </div>
+      <div class="sync-pair-row hidden" id="syncPairRow">
+        <input type="text" id="syncCodeInput" placeholder="Enter pairing code" maxlength="9" autocapitalize="characters">
+        <button class="btn primary" id="syncPairBtn">Sync</button>
+      </div>
+      <div class="sync-hint" id="syncPairHint"></div>
+    </div>
+
     <div class="sheet-actions"><button class="btn primary" id="closeMenu">Done</button></div>
   </div>
 </div>
@@ -633,7 +716,146 @@ function save(){
     lineAttachRoomSuggestions(lineData.rooms);
     lineData.customers = lineBuildCurrentByCustomer(lineData.rooms, lineData.kfcEvents);
   }
+  syncScheduleWrite();
 }
+
+// ============================================================
+// SYNC — pairs this browser's data with other devices via Firestore.
+// No login: a "circle" is a random ID that both devices share, reached either
+// because this device already created/joined one (stored in localStorage) or by
+// typing a short pairing code that resolves to it. localStorage stays the fast
+// local cache; Firestore is the shared source of truth once paired.
+// ============================================================
+const CIRCLE_KEY = 'sampleTracker.circleId';
+let syncCircleId = localStorage.getItem(CIRCLE_KEY) || null;
+let syncApplyingRemote = false; // true while applying an incoming Firestore update,
+                                 // so that update doesn't immediately write itself back
+let syncWriteTimer = null;
+let syncUnsubscribe = null;
+
+function syncGenerateCircleId(){
+  return 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,10);
+}
+function syncGenerateCode(){
+  const chars='23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // no 0/O/1/I — avoids misreads
+  let s='';
+  for(let i=0;i<8;i++) s+=chars[Math.floor(Math.random()*chars.length)];
+  return s.slice(0,4)+'-'+s.slice(4);
+}
+
+function syncScheduleWrite(){
+  if(syncApplyingRemote) return; // don't echo remote updates back to Firestore
+  if(!syncCircleId || !window.__fb) return;
+  clearTimeout(syncWriteTimer);
+  syncWriteTimer = setTimeout(()=>{
+    window.__fb.writeCircle(syncCircleId, state).catch(()=>{
+      // offline or transient error — localStorage already has the latest data,
+      // and the next successful save() will retry the write
+    });
+  }, 600); // small debounce so a burst of ticks becomes one write
+}
+
+function syncApplyRemoteState(remoteState){
+  syncApplyingRemote = true;
+  try{
+    state = remoteState;
+    if(!state.nutri) state.nutri=[];
+    if(!state.shelf) state.shelf=[];
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    if(lineData.rooms){
+      lineAttachRoomSuggestions(lineData.rooms);
+      lineData.customers = lineBuildCurrentByCustomer(lineData.rooms, lineData.kfcEvents);
+    }
+    render();
+  } finally {
+    syncApplyingRemote = false;
+  }
+}
+
+function syncStartListening(circleId){
+  if(syncUnsubscribe) syncUnsubscribe();
+  syncUnsubscribe = window.__fb.listenCircle(circleId, (data)=>{
+    if(data && data.state) syncApplyRemoteState(data.state);
+  });
+}
+
+async function syncInit(){
+  if(!window.__fb) return; // Firebase script hasn't loaded yet — syncInit is
+                            // re-run once it does, see the firebase-ready listener below
+  if(!syncCircleId){
+    // First-ever use on this device with no paired circle yet: create one
+    // silently in the background, seeded with whatever's already in localStorage.
+    syncCircleId = syncGenerateCircleId();
+    localStorage.setItem(CIRCLE_KEY, syncCircleId);
+    try{ await window.__fb.createCircle(syncCircleId, state); }catch(e){}
+  }
+  syncStartListening(syncCircleId);
+  syncRenderMenu();
+}
+
+// Renders the Sync devices section inside the menu sheet — current status, this
+// device's pairing code (generated on demand, not shown until asked for), and the
+// "enter a code to join" box if this device somehow has no circle yet.
+let syncShownCode = null;
+function syncRenderMenu(){
+  const statusEl = document.getElementById('syncStatus');
+  const codeBox = document.getElementById('syncCodeBox');
+  const codeDisplay = document.getElementById('syncCodeDisplay');
+  const pairRow = document.getElementById('syncPairRow');
+  if(!statusEl) return;
+
+  if(!window.__fb){
+    statusEl.textContent = 'Sync unavailable right now.';
+    statusEl.className = 'sync-status err';
+    return;
+  }
+  statusEl.textContent = 'This device is synced. Changes appear on your other devices automatically.';
+  statusEl.className = 'sync-status ok';
+  codeBox.classList.remove('hidden');
+  pairRow.classList.remove('hidden');
+  codeDisplay.textContent = syncShownCode || '(tap to reveal)';
+  codeDisplay.style.cursor = 'pointer';
+}
+
+function syncShowCode(){
+  if(!syncCircleId) return;
+  if(syncShownCode){ syncRenderMenu(); return; }
+  const code = syncGenerateCode();
+  window.__fb.setCodeMapping(code, syncCircleId).then(()=>{
+    syncShownCode = code;
+    syncRenderMenu();
+  }).catch(()=>{
+    document.getElementById('syncStatus').textContent = "Couldn't generate a code — check your connection.";
+    document.getElementById('syncStatus').className = 'sync-status err';
+  });
+}
+
+async function syncPairWithCode(rawCode){
+  const hint = document.getElementById('syncPairHint');
+  const code = rawCode.trim().toUpperCase();
+  if(!code){ hint.textContent = 'Enter a code first.'; return; }
+  hint.textContent = 'Connecting…';
+  try{
+    const targetCircleId = await window.__fb.getCodeMapping(code);
+    if(!targetCircleId){
+      hint.textContent = "That code wasn't found. Check it and try again.";
+      return;
+    }
+    const remote = await window.__fb.getCircle(targetCircleId);
+    syncCircleId = targetCircleId;
+    localStorage.setItem(CIRCLE_KEY, syncCircleId);
+    if(remote && remote.state) syncApplyRemoteState(remote.state);
+    syncStartListening(syncCircleId);
+    hint.textContent = 'Synced! This device now shares data with your other device(s).';
+    syncShownCode = null;
+    syncRenderMenu();
+  }catch(e){
+    hint.textContent = "Couldn't sync — check your connection and try again.";
+  }
+}
+
+window.addEventListener('firebase-ready', syncInit);
+if(window.__fb) syncInit(); // in case the module already finished loading
 function getCust(name){ return state.customers.find(c=>c.name===name); }
 
 function rowsForProduct(p,c){
@@ -1340,7 +1562,7 @@ document.getElementById('addCustBtn').addEventListener('click',()=>{
   if(otherIdx>=0) state.customers.splice(otherIdx,0,nc); else state.customers.push(nc);
   input.value=''; save(); renderCustList(); render();
 });
-document.getElementById('menuBtn').addEventListener('click',()=>{ renderCustList(); menuSheet.classList.add('show'); });
+document.getElementById('menuBtn').addEventListener('click',()=>{ renderCustList(); syncRenderMenu(); menuSheet.classList.add('show'); });
 document.getElementById('closeMenu').addEventListener('click',()=>menuSheet.classList.remove('show'));
 document.getElementById('editToggle').addEventListener('click',()=>{ editing=!editing; if(editing) sorting=false; menuSheet.classList.remove('show'); render(); });
 document.getElementById('sortToggle').addEventListener('click',()=>{ sorting=!sorting; if(sorting) editing=false; menuSheet.classList.remove('show'); render(); });
@@ -1353,6 +1575,13 @@ document.getElementById('exportBtn').addEventListener('click',()=>{
   a.click(); URL.revokeObjectURL(url);
 });
 document.getElementById('importBtn').addEventListener('click',()=>document.getElementById('importFile').click());
+document.getElementById('syncCodeDisplay').addEventListener('click', syncShowCode);
+document.getElementById('syncPairBtn').addEventListener('click', ()=>{
+  syncPairWithCode(document.getElementById('syncCodeInput').value);
+});
+document.getElementById('syncCodeInput').addEventListener('keydown', (e)=>{
+  if(e.key==='Enter') syncPairWithCode(document.getElementById('syncCodeInput').value);
+});
 document.getElementById('importFile').addEventListener('change',e=>{
   const file=e.target.files[0]; if(!file) return; const r=new FileReader();
   r.onload=()=>{ try{
