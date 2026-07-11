@@ -72,6 +72,23 @@
       return onSnapshot(doc(db,'circles',circleId,'line','current'), (snap)=>{
         callback(snap.exists() ? snap.data().data : null);
       });
+    },
+    // Weekly Report's synced snapshot — same pattern as the daily Line Timeline
+    // snapshot above, stored at its own subdocument path so the two don't collide.
+    async writeWeeklySnapshot(circleId, weeklySnapshot){
+      await setDoc(doc(db,'circles',circleId,'line','weekly'), { data: weeklySnapshot, updatedAt: serverTimestamp() });
+    },
+    async clearWeeklySnapshot(circleId){
+      await setDoc(doc(db,'circles',circleId,'line','weekly'), { data: null, updatedAt: serverTimestamp() });
+    },
+    async getWeeklySnapshot(circleId){
+      const snap = await getDoc(doc(db,'circles',circleId,'line','weekly'));
+      return snap.exists() ? snap.data().data : null;
+    },
+    listenWeeklySnapshot(circleId, callback){
+      return onSnapshot(doc(db,'circles',circleId,'line','weekly'), (snap)=>{
+        callback(snap.exists() ? snap.data().data : null);
+      });
     }
   };
   window.dispatchEvent(new Event('firebase-ready'));
@@ -816,6 +833,11 @@ async function syncInit(){
     if(existing) lineSyncApplyRemote(existing);
   }catch(e){}
   lineSyncStartListening(syncCircleId);
+  try{
+    const existingWeekly = await window.__fb.getWeeklySnapshot(syncCircleId);
+    if(existingWeekly) weeklySyncApplyRemote(existingWeekly);
+  }catch(e){}
+  weeklySyncStartListening(syncCircleId);
   syncRenderMenu();
 }
 
@@ -877,6 +899,11 @@ async function syncPairWithCode(rawCode){
       if(existingLine) lineSyncApplyRemote(existingLine);
     }catch(e){}
     lineSyncStartListening(syncCircleId);
+    try{
+      const existingWeekly = await window.__fb.getWeeklySnapshot(syncCircleId);
+      if(existingWeekly) weeklySyncApplyRemote(existingWeekly);
+    }catch(e){}
+    weeklySyncStartListening(syncCircleId);
     hint.textContent = 'Synced! This device now shares data with your other device(s).';
     syncShownCode = null;
     syncRenderMenu();
@@ -959,6 +986,42 @@ function lineSyncClear(){
   render();
   if(syncCircleId && window.__fb){
     window.__fb.clearLineSnapshot(syncCircleId).catch(()=>{});
+  }
+}
+
+// Weekly Report sync — same pattern as the daily view above. neverRan entries are
+// plain strings/arrays (no Dates), so a plain JSON round-trip is enough here, no
+// reviver needed.
+let weeklySyncUnsubscribe = null;
+
+function weeklySyncUpload(){
+  if(!syncCircleId || !window.__fb) return;
+  window.__fb.writeWeeklySnapshot(syncCircleId, JSON.stringify(lineWeeklyReport)).catch(()=>{});
+}
+
+function weeklySyncApplyRemote(serialized){
+  lineSyncApplyingRemote = true;
+  try{
+    lineWeeklyReport = serialized ? JSON.parse(serialized) : null;
+    if(lineWeeklyReport){ lineViewMode='weekly'; }
+    if(currentTab==='line') render();
+  } finally {
+    lineSyncApplyingRemote = false;
+  }
+}
+
+function weeklySyncStartListening(circleId){
+  if(weeklySyncUnsubscribe) weeklySyncUnsubscribe();
+  weeklySyncUnsubscribe = window.__fb.listenWeeklySnapshot(circleId, (serialized)=>{
+    weeklySyncApplyRemote(serialized);
+  });
+}
+
+function weeklySyncClear(){
+  lineWeeklyReport = null;
+  render();
+  if(syncCircleId && window.__fb){
+    window.__fb.clearWeeklySnapshot(syncCircleId).catch(()=>{});
   }
 }
 
@@ -2377,6 +2440,7 @@ function lineHandleWeeklyFiles(files){
     lineWeeklyReport = { fileCount: files.length, neverRan };
     lineViewMode='weekly';
     render();
+    weeklySyncUpload();
   });
 }
 
@@ -2528,6 +2592,7 @@ function renderLineTab(){
       <div class="line-upload-title">${lineWeeklyReport?'Weekly report':'Upload weekly report'}</div>
       <div class="line-upload-sub">${lineWeeklyReport?'Tap to view · tap button to reload':"One or more days' exports · shows what never ran"}</div>
       <button class="btn line-upload-btn" id="lineWeeklyBtn2">Upload files</button>
+      ${lineWeeklyReport?`<button class="btn ghost line-clear-btn" id="lineWeeklyClearBtn">Clear</button>`:''}
       ${lineWeeklyReport?`<div class="line-filename">${lineWeeklyReport.fileCount} file${lineWeeklyReport.fileCount>1?'s':''} loaded</div>`:''}
     </div>
   </div>`;
@@ -2737,7 +2802,9 @@ function wireLineUpload(){
   });
   const wZone=document.getElementById('lineWeeklyZone');
   const wBtn=document.getElementById('lineWeeklyBtn2');
+  const wClearBtn=document.getElementById('lineWeeklyClearBtn');
   if(wBtn) wBtn.addEventListener('click',(e)=>{ e.stopPropagation(); document.getElementById('lineWeeklyImportFile').click(); });
+  if(wClearBtn) wClearBtn.addEventListener('click',(e)=>{ e.stopPropagation(); weeklySyncClear(); });
   if(wZone) wZone.addEventListener('click',()=>{
     if(lineWeeklyReport){ lineViewMode='weekly'; render(); }
     else document.getElementById('lineWeeklyImportFile').click();
