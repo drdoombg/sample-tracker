@@ -159,14 +159,20 @@
   /* Nutritional/Shelf-Life three-state cycle: sent (amber, strikethrough) then
      received (green, same look as Routine's done state) */
   .chip.sent { background:rgba(232,163,61,.1); border-left-color:var(--weekly); opacity:.88; }
-  .chip.sent .check { border-color:var(--weekly); background:var(--weekly); }
+  .chip.sent > .check { border-color:var(--weekly); background:var(--weekly); }
   .chip.sent .chip-name { text-decoration:line-through; text-decoration-color:var(--weekly); opacity:.75; }
   .chip.received { background:var(--done-bg); border-left-color:var(--done); opacity:.82; }
-  .chip.received .check { border-color:var(--done); background:var(--done); }
+  .chip.received > .check { border-color:var(--done); background:var(--done); }
   .chip.received .chip-name { text-decoration:line-through; text-decoration-color:var(--done); opacity:.75; }
-  .chip.sent .check svg, .chip.received .check svg { display:block; }
+  .chip.sent > .check svg, .chip.received > .check svg { display:block; }
+  .sched-dates { display:flex; flex-direction:column; gap:1px; }
+  .sched-date { font-size:10.5px; }
   .sched-date.sent { color:var(--weekly); }
   .sched-date.received { color:var(--done); }
+  .received-check { flex-shrink:0; cursor:pointer; border-color:var(--line); background:transparent; }
+  .received-check svg { display:none; }
+  .received-check.on { border-color:var(--done); background:var(--done); }
+  .received-check.on svg { display:block; }
   .results-summary { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px; }
   .results-stat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
   .results-stat-val { font-size:20px; font-weight:700; font-family:monospace; }
@@ -399,6 +405,8 @@
   .line-cust-item:first-child { border-top:none; }
   .line-cust-product { font-size:13.5px; font-weight:600; }
   .line-cust-since { font-size:10.5px; color:var(--ink-dim); margin-left:auto; }
+  .line-cust-kfcdates { flex-basis:100%; font-size:11px; color:var(--ink-dim); margin-top:2px; }
+  .line-cust-kfcdates .blue { color:var(--monthly); }
   .line-due-icon { font-size:10px; font-weight:800; cursor:pointer; margin-left:2px;
     display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px;
     border-radius:4px; border:1px solid currentColor; }
@@ -824,6 +832,14 @@ function syncApplyRemoteState(remoteState){
     state = remoteState;
     if(!state.nutri) state.nutri=[];
     if(!state.shelf) state.shelf=[];
+    if(!state.tickDates) state.tickDates={};
+    // Backfill: any tick synced in from before this feature existed has no
+    // recorded date. Same honest-placeholder approach as load()'s local backfill —
+    // fill gaps with today's date, never overwrite a real recorded date.
+    const todayStr = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+    Object.keys(state.ticks||{}).forEach(k=>{
+      if(state.ticks[k] && !state.tickDates[k]) state.tickDates[k]=todayStr;
+    });
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
     if(lineData.rooms){
       lineAttachRoomSuggestions(lineData.rooms);
@@ -1222,20 +1238,26 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 function schedList(tab){ return tab==='nutri'?state.nutri:state.shelf; }
 function schedDone(entry){ return entry.doneYear === new Date().getFullYear(); }
 function schedReceived(entry){ return schedDone(entry) && !!entry.received; }
-function toggleSchedDone(tab, id){
+// Main checkbox: plain two-state toggle (untouched <-> sent/amber). Unticking sent
+// also clears received underneath it, since results-received can't stand on its
+// own without a sample having been sent.
+function toggleSchedSent(tab, id){
   const e=schedList(tab).find(x=>x.id===id); if(!e) return;
-  const yr=new Date().getFullYear();
-  const dateStr = ()=>new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
   if(!schedDone(e)){
-    // untouched -> sample sent (amber, leaves Remaining)
-    e.doneYear=yr; e.doneDate=dateStr(); e.received=false; e.receivedDate=null;
-  } else if(!e.received){
-    // sent -> results received (green)
-    e.received=true; e.receivedDate=dateStr();
+    e.doneYear=new Date().getFullYear();
+    e.doneDate=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
   } else {
-    // received -> back to untouched
-    e.doneYear=null; e.doneDate=null; e.received=false; e.receivedDate=null;
+    e.doneYear=null; e.doneDate=null;
+    e.received=false; e.receivedDate=null;
   }
+  save(); render();
+}
+// Second checkbox (only shown once sent is true): independently toggles results
+// received, without touching the sent date.
+function toggleSchedReceived(tab, id){
+  const e=schedList(tab).find(x=>x.id===id); if(!e || !schedDone(e)) return;
+  if(e.received){ e.received=false; e.receivedDate=null; }
+  else { e.received=true; e.receivedDate=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
   save(); render();
 }
 // resolve an entry's current display name + whether its product still exists
@@ -1300,9 +1322,12 @@ function schedChipHTML(tab, entry, info){
   const done=schedDone(entry);
   const received=schedReceived(entry);
   const roomCls = info.room?(roomInfo(info.room)?.cls||''):'';
-  const dateBit = received && entry.receivedDate
-    ? `<span class="sched-date received">✓ ${esc(entry.receivedDate)}</span>`
-    : (done && entry.doneDate ? `<span class="sched-date sent">Sent ${esc(entry.doneDate)}</span>` : '');
+  // Sent date stays visible once sent, regardless of received state — unticking
+  // sent is the only thing that clears it. Received date only shows once received.
+  const datesBit = `<div class="sched-dates">
+    ${done && entry.doneDate ? `<span class="sched-date sent">Sent ${esc(entry.doneDate)}</span>` : ''}
+    ${received && entry.receivedDate ? `<span class="sched-date received">✓ Received ${esc(entry.receivedDate)}</span>` : ''}
+  </div>`;
   // pack info line (shelf-life only)
   let packBit='';
   if(tab==='shelf'){
@@ -1315,14 +1340,19 @@ function schedChipHTML(tab, entry, info){
   const selBox = (tab==='shelf' && packMode)
     ? `<div class="pack-check ${packSel.has(entry.id)?'on':''}" data-packsel="${entry.id}">${packSel.has(entry.id)?'✓':''}</div>`
     : '';
+  // Second checkbox: results received, only shown once a sample has been sent.
+  const receivedBox = done
+    ? `<div class="check received-check ${received?'on':''}" data-receivedtab="${tab}" data-receivedid="${entry.id}" title="Mark results received">${received?CHECK_SVG:''}</div>`
+    : '';
   const stateCls = received ? 'received' : (done ? 'sent' : '');
   return `<div class="chip ${stateCls}" data-schedtab="${tab}" data-schedid="${entry.id}">
     ${packMode&&tab==='shelf' ? selBox : `<div class="check">${CHECK_SVG}</div>`}
     <div class="sched-body">
       <span class="chip-name ${roomCls} ${info.delisted?'delisted':''}">${esc(info.name)}${info.delisted?' (delisted)':''}</span>
       ${packBit}
+      ${datesBit}
     </div>
-    ${dateBit}
+    ${receivedBox}
     <button class="sched-move" data-movetab="${tab}" data-moveid="${entry.id}">Move month</button>
     <button class="sched-del" data-deltab="${tab}" data-delid="${entry.id}">✕</button>
   </div>`;
@@ -1407,11 +1437,18 @@ main.addEventListener('click',e=>{
     render(); return;
   }
   if(editing) return;
+  // second checkbox: results received (only present once sent is ticked)
+  const recBox=e.target.closest('[data-receivedid]');
+  if(recBox){
+    if(packMode) return;
+    toggleSchedReceived(recBox.getAttribute('data-receivedtab'), recBox.getAttribute('data-receivedid'));
+    return;
+  }
   // schedule chip tick (disabled while in pack-info select mode)
   const schip=e.target.closest('[data-schedid]');
   if(schip){
     if(packMode) return; // in pack mode, taps are for selection only
-    toggleSchedDone(schip.getAttribute('data-schedtab'), schip.getAttribute('data-schedid'));
+    toggleSchedSent(schip.getAttribute('data-schedtab'), schip.getAttribute('data-schedid'));
     return;
   }
   const chip=e.target.closest('.chip');
@@ -2075,12 +2112,16 @@ function lineBuildCurrentByCustomer(rooms, kfcEvents){
       if(!current||current.down) return;
       const customer=current.customer||'Other';
       if(!byCustomer[customer]) byCustomer[customer]=[];
-      byCustomer[customer].push({ roomKey, roomLabel, roomCls, line:ln.line, product:current.product, start:current.start, alert:ln.alert });
+      // KFC Line 1 also carries kill/use-by date info from the Start-Up sheet, so
+      // it's visible right here in By Customer without going back to By Lines.
+      let kfcDates=null;
+      if(roomKey==='kfc' && ln.line==='1' && kfcEvents && kfcEvents.length>0){
+        const latest=kfcEvents[kfcEvents.length-1];
+        if(latest.killDate || latest.useByDate) kfcDates={ killDate:latest.killDate, useByDate:latest.useByDate };
+      }
+      byCustomer[customer].push({ roomKey, roomLabel, roomCls, line:ln.line, product:current.product, start:current.start, alert:ln.alert, kfcDates });
     });
   });
-  // KFC Line 1's current product now flows through naturally from the merged rooms
-  // data above (Start-Up events were merged into Line 1's check timeline during
-  // parsing), so no separate injection is needed here.
   const customers = Object.keys(byCustomer)
     .sort((a,b)=>lineCustomerSortIndex(a)-lineCustomerSortIndex(b) || a.localeCompare(b))
     .map(customer=>{
@@ -2739,6 +2780,10 @@ function renderLineTab(){
             <span class="line-cust-product">${item.product}</span>
             ${hasSuggestions ? `<span data-linesuggest="${sugKey}">${lineSuggestionIcons(item.suggestions)}</span>` : ''}
             <span class="line-cust-since mono">since ${lineFmtTime(item.start)}</span>
+            ${item.kfcDates ? `<div class="line-cust-kfcdates">
+              ${item.kfcDates.killDate?`Kill date: <span class="mono blue">${item.kfcDates.killDate}</span>`:''}
+              ${item.kfcDates.useByDate?` · Use by: <span class="mono blue">${item.kfcDates.useByDate}</span>`:''}
+            </div>` : ''}
           </div>`;
           if(hasSuggestions && sugExpanded){
             html += lineRenderSuggestionDetail(item.suggestions);
@@ -2934,7 +2979,14 @@ render();
 // Register service worker (needed for install-to-drawer + offline use)
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    // updateViaCache:'none' stops the BROWSER's own HTTP cache from serving a
+    // stale sw.js — without this, the browser can hold onto an old service worker
+    // script for hours even though sw.js itself says "always fetch fresh", because
+    // that logic only kicks in once the new worker is actually running. This was
+    // the real cause of updates taking minutes / needing repeated refreshes.
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then((reg) => { reg.update(); }) // force an immediate check, don't wait for the browser's own schedule
+      .catch(() => {});
   });
   // When a new sw.js takes over (after a GitHub deploy + skipWaiting), reload
   // automatically so the new version shows up without needing to manually clear

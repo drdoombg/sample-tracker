@@ -1,6 +1,6 @@
 // Simple offline-first service worker for Sample Tracker.
 // Bump CACHE version when you update index.html so phones pick up the new version.
-const CACHE = 'sample-tracker-v27';
+const CACHE = 'sample-tracker-v29';
 const ASSETS = [
   './',
   './index.html',
