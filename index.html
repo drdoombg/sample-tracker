@@ -366,8 +366,7 @@
     <button id="lineSubtabCustomers">By Customer</button>
   </div>
   <div class="toolbar hidden" id="lineToolbar2">
-    <button id="lineExpandAll">Expand all</button>
-    <button id="lineCollapseAll">Collapse all</button>
+    <button id="lineExpandCollapseAll">Expand all</button>
   </div>
 </header>
 
@@ -537,10 +536,13 @@ function hasRooms(custName){ return custName!=='KFC'; }
 let state = load();
 let editing = false;
 let sorting = false;
-let openSet = new Set();
+// Default view: Routine tab starts fully expanded (mirrors the Expand all button).
+let openSet = new Set(
+  state.customers.filter(c=>c.other || state.products.some(p=>p.customer===c.name)).map(c=>c.name)
+);
 let currentTab = 'routine';         // 'routine' | 'nutri' | 'shelf' | 'line'
-let remainingOnly = false;          // routine view filter
-let testRemainingOnly = false;      // test view filter
+let remainingOnly = true;           // routine view filter
+let testRemainingOnly = true;       // test view filter
 let viewMonth = new Date().getMonth(); // 0-11, for nutritional/shelf tabs
 let packMode = false;               // shelf-life: bulk pack-info selection mode
 let packSel = new Set();            // selected shelf entry ids in pack mode
@@ -1933,6 +1935,16 @@ function lineSuggestionIcons(suggestions){
   if(hasShelf) out+='<span class="line-due-icon shelf" title="Shelf-life sample may be due">S</span>';
   return out;
 }
+// Rolls up every suggestion across a set of runs into one combined badge set — used
+// on collapsed room/line headers so R/N/S is visible without expanding, summarizing
+// "something in this room/line's history is possibly still due".
+function lineRollupSuggestionIcons(runs){
+  const all = runs.flatMap(r=>r.suggestions||[]);
+  if(all.length===0) return '';
+  return lineSuggestionIcons(all);
+}
+function lineAllRunsInLine(ln){ return ln.runs; }
+function lineAllRunsInRoom(room){ return room.lines.flatMap(l=>l.runs); }
 function lineCustomerColorClass(name){
   if(!name) return 'line-cust-color-other';
   const key = String(name).toLowerCase().replace(/[^a-z]/g,'');
@@ -2079,6 +2091,18 @@ function lineAttachRoomSuggestions(rooms){
   });
 }
 
+// Collapses every room and every line within it (including KFC's Line 1 card) —
+// used both as the default state right after an upload, and by the Collapse all
+// button.
+function lineCollapseAllRoomsAndLines(rooms, kfcEvents){
+  if(!rooms) return;
+  rooms.forEach(r=>{
+    lineCollapsedRooms[r.roomKey]=true;
+    r.lines.forEach(l=>{ lineCollapsedLines[r.roomKey+'-'+l.line]=true; });
+  });
+  if(kfcEvents && kfcEvents.length>0) lineCollapsedLines['kfc-1']=true;
+}
+
 function lineHandleFile(file){
   lineData.error=null;
   lineViewMode='daily'; // uploading today's export switches the view, doesn't discard the weekly report
@@ -2113,7 +2137,11 @@ function lineHandleFile(file){
           });
         });
       }
-      if(records.length>0){ roomsData=lineBuildRoomLineTimelines(records); lineAttachRoomSuggestions(roomsData); }
+      if(records.length>0){
+        roomsData=lineBuildRoomLineTimelines(records);
+        lineAttachRoomSuggestions(roomsData);
+        lineCollapseAllRoomsAndLines(roomsData, kfcEvents); // default view: everything collapsed
+      }
       if(!roomsData && !kfcEvents){
         lineData={ rooms:null, customers:null, kfcEvents:null, fileName:null,
           error:"Couldn't find recognizable Foreign Body or KFC sheets in this file. Check the tab names." };
@@ -2143,6 +2171,14 @@ function renderLineTab(){
   ['lineSubtabRooms','lineSubtabCustomers'].forEach(id=>{
     document.getElementById(id).classList.toggle('on', id==='lineSubtab'+lineSubtab.charAt(0).toUpperCase()+lineSubtab.slice(1));
   });
+
+  const expandBtn = document.getElementById('lineExpandCollapseAll');
+  if(expandBtn && lineData.rooms){
+    const anyCollapsed = lineData.rooms.some(r=>
+      lineCollapsedRooms[r.roomKey] || r.lines.some(l=>lineCollapsedLines[r.roomKey+'-'+l.line])
+    ) || (lineData.kfcEvents && lineData.kfcEvents.length>0 && lineCollapsedLines['kfc-1']);
+    expandBtn.textContent = anyCollapsed ? 'Expand all' : 'Collapse all';
+  }
 
   let html = `<div class="line-upload-row">
     <div class="line-upload-zone ${lineViewMode==='daily'?'line-upload-active':''}" id="lineUploadZone">
@@ -2190,10 +2226,12 @@ function renderLineTab(){
   if(lineSubtab==='rooms' && lineData.rooms){
     lineData.rooms.forEach(room=>{
       const rCollapsed = lineCollapsedRooms[room.roomKey];
+      const roomBadges = lineRollupSuggestionIcons(lineAllRunsInRoom(room));
       html += `<div class="line-room">
         <div class="line-room-head" data-lineroom="${room.roomKey}">
           <span class="caret ${rCollapsed?'':'open'}"></span>
           <span class="line-room-name ${room.roomCls}">${room.roomLabel}</span>
+          ${roomBadges}
           <span class="line-room-count">${room.lines.length} line${room.lines.length>1?'s':''}</span>
         </div>`;
       if(!rCollapsed){
@@ -2256,10 +2294,12 @@ function lineRenderLineCard(roomKey, ln){
   const lCollapsed=lineCollapsedLines[lkey];
   const current=ln.runs[ln.runs.length-1];
   const lineDisplayName = /^\d+$/.test(String(ln.line)) ? 'Line '+ln.line : String(ln.line);
+  const lineBadges = lineRollupSuggestionIcons(lineAllRunsInLine(ln));
   let html = `<div class="line-linecard">
     <div class="line-linecard-head" data-lineline="${lkey}">
       <span class="caret ${lCollapsed?'':'open'}"></span>
       <span class="line-linecard-name ${ln.alert?'line-alert':''}">${lineDisplayName}</span>
+      ${lineBadges}
       ${lCollapsed && current ? `<span class="line-collapsed-summary ${current.down?'down':''}">${current.down?current.downLabel:current.product}${current.customer?' ('+current.customer+')':''}</span>` : ''}
       <span class="line-lastcheck">last check ${lineFmtTime(ln.lastCheckTs)}</span>
     </div>`;
@@ -2308,10 +2348,12 @@ function lineRenderKfcLine1Card(kfcRoom){
   const latest = lineData.kfcEvents[lineData.kfcEvents.length-1];
   const line1Data = kfcRoom ? kfcRoom.lines.find(l=>l.line==='1') : null;
   const alert = line1Data ? line1Data.alert : false;
+  const lineBadges = line1Data ? lineRollupSuggestionIcons(lineAllRunsInLine(line1Data)) : '';
   let html = `<div class="line-linecard">
     <div class="line-linecard-head" data-lineline="kfc-1">
       <span class="caret ${lCollapsed?'':'open'}"></span>
       <span class="line-linecard-name ${alert?'line-alert':''}">Line 1</span>
+      ${lineBadges}
       ${lCollapsed && latest ? `<span class="line-collapsed-summary">${latest.productType||'—'}</span>` : ''}
     </div>`;
   if(!lCollapsed){
@@ -2393,15 +2435,20 @@ document.getElementById('lineImportFile').addEventListener('change', e=>{
 });
 document.getElementById('lineSubtabRooms').addEventListener('click', ()=>{ lineSubtab='rooms'; render(); });
 document.getElementById('lineSubtabCustomers').addEventListener('click', ()=>{ lineSubtab='customers'; render(); });
-document.getElementById('lineExpandAll').addEventListener('click', ()=>{
-  if(lineData.rooms){
-    lineData.rooms.forEach(r=>{ lineCollapsedRooms[r.roomKey]=false; r.lines.forEach(l=>{ lineCollapsedLines[r.roomKey+'-'+l.line]=false; }); });
-    lineCollapsedLines['kfc-1']=false;
+document.getElementById('lineExpandCollapseAll').addEventListener('click', ()=>{
+  if(!lineData.rooms) return;
+  const anyCollapsed = lineData.rooms.some(r=>
+    lineCollapsedRooms[r.roomKey] || r.lines.some(l=>lineCollapsedLines[r.roomKey+'-'+l.line])
+  ) || (lineData.kfcEvents && lineData.kfcEvents.length>0 && lineCollapsedLines['kfc-1']);
+  if(anyCollapsed){
+    lineData.rooms.forEach(r=>{
+      lineCollapsedRooms[r.roomKey]=false;
+      r.lines.forEach(l=>{ lineCollapsedLines[r.roomKey+'-'+l.line]=false; });
+    });
+    if(lineData.kfcEvents) lineCollapsedLines['kfc-1']=false;
+  } else {
+    lineCollapseAllRoomsAndLines(lineData.rooms, lineData.kfcEvents);
   }
-  render();
-});
-document.getElementById('lineCollapseAll').addEventListener('click', ()=>{
-  if(lineData.rooms){ lineData.rooms.forEach(r=>{ lineCollapsedRooms[r.roomKey]=true; }); }
   render();
 });
 document.getElementById('lineWeeklyImportFile').addEventListener('change', e=>{
