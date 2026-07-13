@@ -441,7 +441,7 @@
   .line-weekly-title { font-size:13.5px; font-weight:700; margin-bottom:3px; }
   .line-weekly-sub { font-size:11.5px; color:var(--ink-dim); margin-bottom:12px; }
   .line-weekly-cust { margin-bottom:10px; }
-  .line-weekly-cust-name { font-size:12px; font-weight:700; margin-bottom:5px; }
+  .line-weekly-cust-name { font-size:12px; font-weight:700; margin-bottom:5px; display:inline-block; }
   .line-weekly-item { font-size:12.5px; padding:3px 0; display:flex; align-items:baseline; gap:6px; }
   .line-weekly-item .dim { color:var(--ink-dim); font-size:11px; }
 
@@ -1944,7 +1944,7 @@ function lineRoomClass(key){
 // Customer name normalization onto this app's own customer list (state.customers),
 // so spelling ("Co op"->"Co-op", "MS"->"M&S") and order match Routine tab exactly.
 // Anything not recognized (e.g. "Intercompany") is kept under its own real name.
-const LINE_CUSTOMER_ALIASES={'co op':'Co-op','coop':'Co-op','ms':'M&S','m&s':'M&S','m and s':'M&S'};
+const LINE_CUSTOMER_ALIASES={'co op':'Co-op','coop':'Co-op','ms':'M&S','m&s':'M&S','m and s':'M&S','booths':'Booth'};
 function lineNormalizeCustomerName(raw){
   if(!raw) return 'Other';
   const trimmed=String(raw).trim(); const lc=trimmed.toLowerCase();
@@ -2006,10 +2006,12 @@ function lineParseForeignBodySheet(sheetRows){
     const down=lineIsDowntime(checkType);
     const product=down?null:[productType,flavour,weight].filter(Boolean).join(' — ');
     // Department=KFC foreign-body rows only ever contribute a down/no-production
-    // signal to Line 1 — their product text ("Wholebird") is generic noise, not
-    // KFC's real product identity (that only comes from Start-Up). A non-down KFC
-    // foreign-body row carries no useful information here, so it's dropped; only
-    // down-checks survive to merge with the Start-Up product timeline for Line 1.
+    // signal to Line 1 in the shared By Lines / By Customer data — their product
+    // text is not used there (Line 1's displayed product stays Start-Up's job,
+    // merged in separately). A non-down KFC foreign-body row carries no useful
+    // information for THIS parser; only down-checks survive here. The weekly
+    // never-ran report reads this same sheet independently, via
+    // lineCollectRanProducts, and keeps the flavour text — see that function.
     // Department=FP3 rows are a genuinely separate line (Hot Wings only), routed to
     // their own 'fp3' room key by lineNormalizeRoomKey and merged into the KFC room
     // grouping later, in lineBuildRoomLineTimelines.
@@ -2480,6 +2482,75 @@ function lineCustomerColorClass(name){
 // running at least once. Compares that against every active product on the full
 // Routine/Nutritional/Shelf-Life lists using the same room-specific identity rules
 // as the "likely due" suggestions, to find what never showed up at all.
+// Dedicated to the weekly never-ran report only — reads KFC/FP3 department rows
+// directly from the raw sheet, keeping the Flavour/Size text (Gas Flushed, Frozen,
+// Dark Meat, Hot Wings, etc). This is intentionally separate from
+// lineParseForeignBodySheet, which discards that same text for By Lines/By
+// Customer display purposes (Line 1's shown product is Start-Up's job there) —
+// the never-ran check has a different need and reads the sheet on its own.
+function lineCollectKfcRanEvidence(sheetRows){
+  if(sheetRows.length===0) return [];
+  const headers=Object.keys(sheetRows[0]);
+  const deptKey=lineFindCol(headers,['department']);
+  const checkTypeKey=lineFindCol(headers,['type of the check','type of check']);
+  const flavourKey=lineFindCol(headers,['flavour','size']);
+  const customerKey=lineFindCol(headers,['customer']);
+  const out=[];
+  sheetRows.forEach(row=>{
+    const deptRaw=row[deptKey]?String(row[deptKey]).trim():'';
+    const roomKey=lineNormalizeRoomKey(deptRaw);
+    if(roomKey!=='kfc' && roomKey!=='fp3') return;
+    const checkType=row[checkTypeKey]||'';
+    if(lineIsDowntime(checkType)) return;
+    const flavour=row[flavourKey]?String(row[flavourKey]).trim():'';
+    if(!flavour) return;
+    const customerRaw=row[customerKey]?String(row[customerKey]).trim():'';
+    const customer=(customerRaw && customerRaw.toLowerCase()!=='na') ? lineNormalizeCustomerName(customerRaw) : 'KFC';
+    out.push({ roomKey:'kfc', product:flavour, customer });
+  });
+  return out;
+}
+
+// Booth has two products that can't be told apart by product-name text alone:
+// "Fresh Whole Bird" is any FP1 Wholebird check; "Hot Cooked Fresh Whole Bird" has
+// no distinguishing flavour text at all — it's only identifiable by running on
+// FP2 Line 1's Bulk X-Ray specifically. Emits synthetic marker product strings
+// that lineBoothIdentity below recognizes directly, bypassing name/word matching
+// entirely for these two since text alone can't distinguish them.
+function lineCollectBoothRanEvidence(sheetRows){
+  if(sheetRows.length===0) return [];
+  const headers=Object.keys(sheetRows[0]);
+  const deptKey=lineFindCol(headers,['department']);
+  const lineKey=lineFindCol(headers,['line']);
+  const deviceKey=lineFindCol(headers,['device type']);
+  const checkTypeKey=lineFindCol(headers,['type of the check','type of check']);
+  const customerKey=lineFindCol(headers,['customer']);
+  const out=[];
+  sheetRows.forEach(row=>{
+    const customerRaw=row[customerKey]?String(row[customerKey]).trim():'';
+    if(!customerRaw || lineNormalizeCustomerName(customerRaw)!=='Booth') return;
+    const checkType=row[checkTypeKey]||'';
+    if(lineIsDowntime(checkType)) return;
+    const roomKey=lineNormalizeRoomKey(row[deptKey]?String(row[deptKey]).trim():'');
+    const lineNum=row[lineKey]!=null?String(row[lineKey]).trim():'';
+    const device=row[deviceKey]?String(row[deviceKey]).trim().toLowerCase():'';
+    if(roomKey==='fp2' && lineNum==='1' && device.includes('bulk x-ray')){
+      out.push({ roomKey:'fp1', product:'__BOOTH_HOT_COOKED__', customer:'Booth' });
+    } else if(roomKey==='fp1'){
+      out.push({ roomKey:'fp1', product:'__BOOTH_FRESH__', customer:'Booth' });
+    }
+  });
+  return out;
+}
+function lineBoothIdentity(productName){
+  const p=String(productName||'').toLowerCase();
+  if(p.includes('hot cooked')) return '__BOOTH_HOT_COOKED__';
+  if(p==='__booth_hot_cooked__') return '__BOOTH_HOT_COOKED__';
+  if(p==='__booth_fresh__') return '__BOOTH_FRESH__';
+  if(p.includes('fresh whole bird')) return '__BOOTH_FRESH__';
+  return null;
+}
+
 function lineCollectRanProducts(wb){
   const ran=[]; // { roomKey, product, customer }
   const fbSheetName=lineFindSheetName(wb,['foreign body','metal','detecto']);
@@ -2488,6 +2559,8 @@ function lineCollectRanProducts(wb){
     lineParseForeignBodySheet(rows).forEach(r=>{
       if(!r.down && r.product) ran.push({ roomKey:r.roomKey==='kfc'?'kfc':r.roomKey, product:r.product, customer:r.customer||'' });
     });
+    ran.push(...lineCollectKfcRanEvidence(rows));
+    ran.push(...lineCollectBoothRanEvidence(rows));
   }
   const kfcSheetName=lineFindSheetName(wb,['kfc']);
   if(kfcSheetName){
@@ -2576,6 +2649,14 @@ function lineHandleWeeklyFiles(files){
       const acceptableRooms = [p.roomKey, ...lineCrossRoomsFor(p.customer, p.name)];
       const roomRan = custRan.filter(r=>acceptableRooms.includes(r.roomKey) || (p.roomKey==='kfc'&&r.roomKey==='kfc'));
       for(const r of roomRan){
+        // Booth: identity comes from WHERE the check happened (device+line), not
+        // the product name text, since one of the two products has no
+        // distinguishing flavour text at all.
+        if(p.customer==='Booth'){
+          const pId=lineBoothIdentity(p.name), rId=lineBoothIdentity(r.product);
+          if(pId && rId && pId===rId) return false;
+          continue;
+        }
         const matches = lineMatchRemaining(r.roomKey, r.product, [{name:p.name, source:'Routine', roomKey:r.roomKey}]);
         if(matches.length>0) return false;
       }
