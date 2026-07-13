@@ -2226,12 +2226,20 @@ function lineKfcIdentity(name){
   if(lc.includes('food service')) return null; // never sampled, excluded entirely
   let base=null;
   if(lc.includes('dark meat')) base='dark meat';
-  else if(lc.includes('9 piece')||lc.includes('9piece')) base='9 piece';
   else if(lc.includes('hot wings')) base='hot wings';
+  else if(lc.includes('9 piece')||lc.includes('9piece')) base='9 piece';
+  else if(lc.includes('gas flushed')||lc.includes('frozen')||lc.includes('fresh standard')||lc.includes('standard')){
+    // The spreadsheet often records just the version word (Gas Flushed, Frozen,
+    // Standard, Fresh Standard) with no "9 Piece" text at all — those version
+    // words default to meaning 9 Piece unless Dark Meat or Hot Wings was already
+    // matched above.
+    base='9 piece';
+  }
   else return { base:lc.trim(), version:lc.trim() }; // unrecognized — fall back to literal
   let version=null;
   if(lc.includes('gas flushed')) version='gas flushed';
   else if(lc.includes('frozen')) version='frozen';
+  else if(lc.includes('fresh standard')) version='fresh standard';
   else if(lc.includes('standard')) version='standard';
   return { base, version };
 }
@@ -2287,6 +2295,21 @@ function lineFp2WeightVersion(fp2Family, name){
     if(diff<bestDiff){ bestDiff=diff; best=v; }
   });
   return (best && bestDiff<=60) ? best : null;
+}
+
+// A few products are genuinely tagged under one room (that's where they're
+// produced and belong conceptually) but pass through another room's inspection
+// point as part of the process, so their "did it run" evidence shows up there
+// instead. Keyed by customer+product name (case-insensitive substring), listing
+// which other room(s) to also check.
+const LINE_CROSS_ROOM_EXCEPTIONS = [
+  { customer:'Booth', nameIncludes:'hot cooked fresh whole bird', alsoCheckRooms:['fp2'] },
+];
+function lineCrossRoomsFor(customer, name){
+  const hit = LINE_CROSS_ROOM_EXCEPTIONS.find(e=>
+    e.customer===customer && String(name||'').toLowerCase().includes(e.nameIncludes)
+  );
+  return hit ? hit.alsoCheckRooms : [];
 }
 
 function lineMatchRemaining(roomKey, runningProduct, remaining){
@@ -2507,6 +2530,18 @@ function lineAllRoutineProducts(){
 function lineNutriShelfRemainingFlags(customerName, roomKey, productName){
   const nowMonth = new Date().getMonth();
   const flags=[];
+  // Routine: is there a still-unticked Routine entry for this customer that this
+  // never-ran product would match against?
+  const cust = getCust(customerName);
+  if(cust){
+    activeProducts(customerName).forEach(p=>{
+      rowsForProduct(p,cust).forEach(r=>{
+        if(isDone(r.pid,r.freq)) return;
+        const matches = lineMatchRemaining(roomKey, productName, [{name:r.name, source:'Routine', roomKey:r.room}]);
+        if(matches.length>0 && !flags.includes('R')) flags.push('R');
+      });
+    });
+  }
   ['nutri','shelf'].forEach(tab=>{
     schedList(tab).forEach(entry=>{
       if(entry.month!==nowMonth) return;
@@ -2538,9 +2573,10 @@ function lineHandleWeeklyFiles(files){
     const routineProducts = lineAllRoutineProducts();
     const neverRan = routineProducts.filter(p=>{
       const custRan = ranAll.filter(r=>lineNormalizeCustomerName(r.customer)===lineNormalizeCustomerName(p.customer) || r.customer===p.customer);
-      const roomRan = custRan.filter(r=>r.roomKey===p.roomKey || (p.roomKey==='kfc'&&r.roomKey==='kfc'));
+      const acceptableRooms = [p.roomKey, ...lineCrossRoomsFor(p.customer, p.name)];
+      const roomRan = custRan.filter(r=>acceptableRooms.includes(r.roomKey) || (p.roomKey==='kfc'&&r.roomKey==='kfc'));
       for(const r of roomRan){
-        const matches = lineMatchRemaining(p.roomKey, r.product, [{name:p.name, source:'Routine', roomKey:p.roomKey}]);
+        const matches = lineMatchRemaining(r.roomKey, r.product, [{name:p.name, source:'Routine', roomKey:r.roomKey}]);
         if(matches.length>0) return false;
       }
       return true;
@@ -2857,9 +2893,39 @@ function lineRenderLineCard(roomKey, ln){
 // KFC Line 1 — the existing Start-Up product/kill-date timeline card, unchanged,
 // just relocated to sit inside the KFC room instead of its own subtab. Title turns
 // red if the merged room data shows Line 1 is currently down (foreign-body signal).
+function lineKfcDisplayName(base){
+  if(base==='9 piece') return '9 Piece';
+  if(base==='dark meat') return 'Dark Meat';
+  if(base==='hot wings') return 'Hot Wings';
+  return base; // unrecognized products keep their literal text
+}
+
+// Groups the day's KFC Start-Up events into displayed entries: a new entry only
+// starts when the product identity (9 Piece / Dark Meat / Hot Wings) or the kill
+// date actually changes. A reel change, or a version-word change that still means
+// the same identity (Gas Flushed -> Frozen, both "9 Piece") with the same kill
+// date, folds into the same entry rather than creating a new one.
+function lineGroupKfcEvents(events){
+  const groups=[];
+  events.forEach(ev=>{
+    const id = lineKfcIdentity(ev.productType);
+    const base = id ? id.base : (ev.productType||'').toLowerCase();
+    const killDate = ev.killDate || null;
+    const last = groups[groups.length-1];
+    if(last && last.base===base && last.killDate===killDate){
+      last.events.push(ev);
+    } else {
+      groups.push({ base, killDate, events:[ev] });
+    }
+  });
+  return groups;
+}
+
 function lineRenderKfcLine1Card(kfcRoom){
   const lCollapsed = lineCollapsedLines['kfc-1'];
   const latest = lineData.kfcEvents[lineData.kfcEvents.length-1];
+  const latestId = lineKfcIdentity(latest?.productType);
+  const latestDisplay = latestId ? lineKfcDisplayName(latestId.base) : (latest?.productType||'—');
   const line1Data = kfcRoom ? kfcRoom.lines.find(l=>l.line==='1') : null;
   const alert = line1Data ? line1Data.alert : false;
   const lineBadges = line1Data ? lineRollupSuggestionIcons(lineAllRunsInLine(line1Data)) : '';
@@ -2868,22 +2934,24 @@ function lineRenderKfcLine1Card(kfcRoom){
       <span class="caret ${lCollapsed?'':'open'}"></span>
       <span class="line-linecard-name ${alert?'line-alert':''}">Line 1</span>
       ${lineBadges}
-      ${lCollapsed && latest ? `<span class="line-collapsed-summary">${latest.productType||'—'}</span>` : ''}
+      ${lCollapsed && latest ? `<span class="line-collapsed-summary">${latestDisplay}</span>` : ''}
     </div>`;
   if(!lCollapsed){
+    const groups = lineGroupKfcEvents(lineData.kfcEvents);
     html += `<div class="line-kfc-timeline">`;
-    lineData.kfcEvents.forEach(ev=>{
-      const isDateChange = /kill date|use by/i.test(ev.checkType);
+    groups.forEach(group=>{
+      const firstEv = group.events[0];
+      const displayName = lineKfcDisplayName(group.base);
       html += `<div class="line-kfc-event">
-        <span class="line-kfc-dot ${isDateChange?'date':'product'}"></span>
+        <span class="line-kfc-dot product"></span>
         <div class="line-kfc-card">
           <div class="line-kfc-head">
-            <span class="line-kfc-product">${ev.productType||'Product change'}</span>
-            <span class="mono line-kfc-time">${lineFmtTime(ev.ts)}</span>
+            <span class="line-kfc-product">${displayName}</span>
+            <span class="mono line-kfc-time">${lineFmtTime(firstEv.ts)}</span>
           </div>
           <div class="line-kfc-dates">
-            ${ev.killDate?`<span>Kill date: <span class="mono blue">${ev.killDate}</span></span>`:''}
-            ${ev.useByDate?`<span>Use by: <span class="mono blue">${ev.useByDate}</span></span>`:''}
+            ${group.killDate?`<span>Kill date: <span class="mono blue">${group.killDate}</span></span>`:''}
+            ${firstEv.useByDate?`<span>Use by: <span class="mono blue">${firstEv.useByDate}</span></span>`:''}
           </div>
         </div>
       </div>`;
@@ -2925,7 +2993,19 @@ function wireLineUpload(){
 function wireLineInteractions(){
   main.querySelectorAll('[data-lineroom]').forEach(el=>el.addEventListener('click',()=>{
     const k=el.getAttribute('data-lineroom');
-    lineCollapsedRooms[k]=!lineCollapsedRooms[k]; render();
+    const wasCollapsed = lineCollapsedRooms[k];
+    lineCollapsedRooms[k]=!lineCollapsedRooms[k];
+    // KFC and Deboning: expanding the room also expands all its lines, since
+    // those rooms only ever have one or two lines and there's no benefit to a
+    // second collapse level there.
+    if(wasCollapsed && (k==='kfc' || k==='deb') && lineData.rooms){
+      const room = lineData.rooms.find(r=>r.roomKey===k);
+      if(room){
+        room.lines.forEach(l=>{ lineCollapsedLines[k+'-'+l.line]=false; });
+        if(k==='kfc') lineCollapsedLines['kfc-1']=false;
+      }
+    }
+    render();
   }));
   main.querySelectorAll('[data-lineline]').forEach(el=>el.addEventListener('click',()=>{
     const k=el.getAttribute('data-lineline');
