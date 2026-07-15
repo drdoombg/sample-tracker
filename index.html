@@ -296,6 +296,9 @@
   .sched-move { background:var(--panel-2); border:1px solid var(--line); color:var(--ink);
     height:30px; border-radius:8px; font-size:12px; cursor:pointer; display:none; flex-shrink:0; padding:0 8px; }
   body.editing .sched-move { display:block; }
+  .sched-rename { background:var(--panel-2); border:1px solid var(--line); color:var(--ink);
+    height:30px; border-radius:8px; font-size:12px; cursor:pointer; display:none; flex-shrink:0; padding:0 8px; }
+  body.editing .sched-rename { display:block; }
   .room-edit-wrap { flex-shrink:0; }
   .room-edit { background:var(--bg); border:1px solid var(--line); color:var(--ink);
     border-radius:8px; padding:5px 6px; font-size:12px; max-width:120px; }
@@ -1270,6 +1273,17 @@ function schedName(entry){
   return { name:entry.name, customer:entry.customer||'Other', room:entry.room, delisted:false };
 }
 
+// Nutritional/Shelf-Life ordering mirrors Routine's own product order within a
+// customer (same array position Routine uses for its manual up/down reordering).
+// Standalone entries with no linked product (trials, one-offs) have no Routine
+// position to match, so they sort alphabetically and land after any linked ones.
+function schedRoutinePosition(entry, customerName){
+  if(!entry.pid) return null;
+  const custProducts = state.products.filter(p=>p.customer===customerName);
+  const idx = custProducts.findIndex(p=>p.id===entry.pid);
+  return idx<0 ? null : idx;
+}
+
 function renderTestTab(tab){
   const list=schedList(tab).filter(e=>e.month===viewMonth);
   const label = tab==='nutri'?'Nutritional':'Shelf-Life';
@@ -1299,8 +1313,18 @@ function renderTestTab(tab){
     let items=byCust[cust];
     if(testRemainingOnly && !editing) items=items.filter(x=>!schedDone(x.e));
     if(items.length===0) continue;
-    // order by room within customer
-    items.sort((a,b)=>roomOrder(a.info.room)-roomOrder(b.info.room));
+    // order by room (matches Routine), then by Routine's own product order within
+    // that room, then alphabetically for anything with no Routine position
+    items.sort((a,b)=>{
+      const roomDiff = roomOrder(a.info.room)-roomOrder(b.info.room);
+      if(roomDiff!==0) return roomDiff;
+      const posA = schedRoutinePosition(a.e, cust);
+      const posB = schedRoutinePosition(b.e, cust);
+      if(posA!=null && posB!=null) return posA-posB;
+      if(posA!=null) return -1; // linked entries before standalone ones
+      if(posB!=null) return 1;
+      return (a.info.name||'').localeCompare(b.info.name||'');
+    });
     const pend=byCust[cust].filter(x=>!schedDone(x.e)).length;
     html += `<div class="cust open">
       <div class="cust-head" style="cursor:default">
@@ -1345,6 +1369,11 @@ function schedChipHTML(tab, entry, info){
     ? `<div class="check received-check ${received?'on':''}" data-receivedtab="${tab}" data-receivedid="${entry.id}" title="Mark results received">${received?CHECK_SVG:''}</div>`
     : '';
   const stateCls = received ? 'received' : (done ? 'sent' : '');
+  // Rename only applies to standalone entries (not linked to a Routine product via
+  // pid) — a linked entry's name always mirrors the product, renamed in Routine.
+  const renameBtn = (editing && !entry.pid)
+    ? `<button class="sched-rename" data-renametab="${tab}" data-renameid="${entry.id}">Rename</button>`
+    : '';
   return `<div class="chip ${stateCls}" data-schedtab="${tab}" data-schedid="${entry.id}">
     ${packMode&&tab==='shelf' ? selBox : `<div class="check">${CHECK_SVG}</div>`}
     <div class="sched-body">
@@ -1353,6 +1382,7 @@ function schedChipHTML(tab, entry, info){
       ${datesBit}
     </div>
     ${receivedBox}
+    ${renameBtn}
     <button class="sched-move" data-movetab="${tab}" data-moveid="${entry.id}">Move month</button>
     <button class="sched-del" data-deltab="${tab}" data-delid="${entry.id}">✕</button>
   </div>`;
@@ -1410,6 +1440,21 @@ main.addEventListener('click',e=>{
   if(smv){
     e.stopPropagation();
     openMoveMonth(smv.getAttribute('data-movetab'), smv.getAttribute('data-moveid'));
+    return;
+  }
+  // schedule: rename a standalone entry (not linked to a Routine product)
+  const sren=e.target.closest('[data-renameid]');
+  if(sren){
+    e.stopPropagation();
+    const tab=sren.getAttribute('data-renametab'), id=sren.getAttribute('data-renameid');
+    const entry=schedList(tab).find(x=>x.id===id);
+    if(entry && !entry.pid){
+      const newName=prompt('Rename', entry.name||'');
+      if(newName!=null && newName.trim()){
+        entry.name=newName.trim();
+        save(); render();
+      }
+    }
     return;
   }
   const del=e.target.closest('[data-delpid]');
@@ -2180,6 +2225,27 @@ function lineSizePhrase(name){
   return null;
 }
 
+// Cutting/Deboning category words are exclusive selectors too — "Diced Breast" and
+// "Breast Fillet" are different product categories, not variants, even though they
+// share the word "breast" (a stopword-adjacent problem: "fillet" is already a
+// stopword, so "Breast Fillet" reduces to just "breast", which would otherwise
+// false-match "Diced Breast" at the same weight). Checked longest-phrase-first so
+// "diced breast" wins over a bare "breast", and "thigh fillet"/"drum fillet" win
+// over "thigh"/"drumsticks". Plural-insensitive: trailing 's' is stripped before
+// comparing, so "Drumstick"/"Drumsticks" and "Breast Fillet"/"Breast Fillets" match.
+const LINE_CATEGORY_PHRASES = [
+  'diced breast','breast fillet','breast portion','breast strip',
+  'thigh fillet','drum fillet','mini fillet',
+  'thigh','drumstick','leg','wing',
+];
+function lineCategoryPhrase(name){
+  const lc=String(name||'').toLowerCase().replace(/s\b/g,''); // de-pluralize before matching
+  for(const phrase of LINE_CATEGORY_PHRASES){
+    if(new RegExp('\\b'+phrase+'\\b').test(lc)) return phrase;
+  }
+  return null;
+}
+
 // Known name-variant aliases — different ways the same product gets typed across the
 // portal export and the tracker's product list. Applied as whole-phrase replacements
 // before word-splitting so word order in the variant doesn't matter (e.g. "Small
@@ -2318,17 +2384,21 @@ function lineMatchRemaining(roomKey, runningProduct, remaining){
   if(!runningProduct) return [];
 
   if(roomKey==='cut' || roomKey==='deb'){
-    // Cutting & Deboning: name words AND weight must both line up. Weight
-    // comparison is tolerant of kg-vs-grams and light rounding (lineWeightsMatch),
-    // since the export's raw weight column may be a bare number in grams while the
-    // product list says "2kg", or either side may be rounded slightly.
-    const runningWords=new Set(lineWordsOf(runningProduct));
-    if(runningWords.size===0) return [];
+    // Cutting & Deboning: category word AND weight must both line up. Category
+    // (Diced Breast vs Breast Fillet vs Thigh Fillet etc) is the real identity
+    // check here — plural-insensitive and exact, so it's sufficient on its own
+    // without also requiring a generic word-overlap (which would incorrectly
+    // reject "Drumsticks" vs "Drumstick" as different words). Weight comparison
+    // is tolerant of kg-vs-grams and light rounding (lineWeightsMatch), since the
+    // export's raw weight column may be a bare number in grams while the product
+    // list says "2kg", or either side may be rounded slightly.
+    const runningCategory=lineCategoryPhrase(runningProduct);
+    if(!runningCategory) return [];
     return remaining.filter(r=>{
       if(r.roomKey && r.roomKey!==roomKey) return false;
-      const rWords=lineWordsOf(r.name);
-      const nameMatches = rWords.some(w=>runningWords.has(w));
-      return nameMatches && lineWeightsMatch(runningProduct, r.name);
+      const rCategory=lineCategoryPhrase(r.name);
+      if(rCategory!==runningCategory) return false;
+      return lineWeightsMatch(runningProduct, r.name);
     });
   }
 
@@ -2584,6 +2654,7 @@ function lineAllRoutineProducts(){
     if(c.other) return; // exclude "Other"
     activeProducts(c.name).forEach(p=>{
       rowsForProduct(p,c).forEach(r=>{
+        if(r.room==='kfc') return; // KFC always runs — not worth tracking in never-ran
         // A product can be scheduled under multiple frequencies (e.g. Co-op is
         // both weekly and monthly) — that's still one physical product for the
         // "did it ever run" question, so dedupe on name+customer+room.
